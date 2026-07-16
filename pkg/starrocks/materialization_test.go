@@ -244,6 +244,32 @@ func TestMaterializer_Render(t *testing.T) {
 				"SELECT id, created_at FROM src;",
 		},
 		{
+			name: "table with order_by alone triggers typed create table",
+			asset: &pipeline.Asset{
+				Name: "analytics.sorted_orders",
+				Materialization: pipeline.Materialization{
+					Type: pipeline.MaterializationTypeTable,
+				},
+				StarRocks: pipeline.StarRocksConfig{OrderBy: []string{"created_at"}},
+				Columns: []pipeline.Column{
+					{Name: "id", Type: "INT"},
+					{Name: "created_at", Type: "DATETIME"},
+				},
+			},
+			query: "SELECT id, created_at FROM src",
+			want: "DROP TABLE IF EXISTS `analytics`.`sorted_orders`;\n" +
+				"CREATE TABLE `analytics`.`sorted_orders` (\n" +
+				"`id` INT,\n" +
+				"`created_at` DATETIME\n" +
+				")\n" +
+				"DUPLICATE KEY(`id`)\n" +
+				"DISTRIBUTED BY HASH(`id`) BUCKETS 1\n" +
+				"ORDER BY (`created_at`)\n" +
+				"PROPERTIES (\"replication_num\" = \"1\");\n" +
+				"INSERT INTO `analytics`.`sorted_orders` (`id`, `created_at`)\n" +
+				"SELECT id, created_at FROM src;",
+		},
+		{
 			name: "merge creates primary key table and upserts",
 			asset: &pipeline.Asset{
 				Name: "analytics.accounts",
