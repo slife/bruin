@@ -60,6 +60,7 @@ so they work the same way as on the other platforms:
 
 - `materialization.cluster_by` → `DISTRIBUTED BY HASH(...)` (defaults to the key columns)
 - `materialization.partition_by` → `PARTITION BY (...)` (a column or expression such as `date_trunc('day', event_date)`)
+- `starrocks.order_by: [col, ...]` → `ORDER BY (...)` (the table's sort key)
 
 `partition_by` is emitted verbatim so that expressions work, so it is **not** automatically backtick-quoted. If you partition on a single column whose name is a StarRocks reserved word (e.g. `date`, `value`, `key`), quote it yourself: `partition_by: "`date`"`.
 
@@ -75,11 +76,12 @@ materialization:
 starrocks:
   table_model: primary_key          # duplicate_key | unique_key | primary_key
   buckets: 8                         # defaults to 1
+  order_by: [event_date]             # ORDER BY (event_date)
   properties:
     replication_num: "1"
 ```
 
-When any of these are set (or `columns` are declared), Bruin emits a typed `CREATE TABLE` with the key clause, `PARTITION BY`, `DISTRIBUTED BY HASH(...) BUCKETS`, and `PROPERTIES`. Otherwise it falls back to `CREATE TABLE ... AS SELECT`.
+When any of these are set (or `columns` are declared), Bruin emits a typed `CREATE TABLE` with the key clause, `PARTITION BY`, `DISTRIBUTED BY HASH(...) BUCKETS`, `ORDER BY`, and `PROPERTIES`. Otherwise it falls back to `CREATE TABLE ... AS SELECT`. Setting `order_by` on its own — with no `cluster_by`, `table_model`, `buckets`, or `columns` — is enough by itself to switch the asset onto the typed `CREATE TABLE` path.
 
 #### Merge materialization
 
@@ -107,6 +109,108 @@ columns:
 SELECT account_id, status
 FROM staging.accounts
 ```
+
+#### Materialized views
+
+Setting `materialization.type: materialized_view` on a `starrocks.sql` asset materializes it as a StarRocks **materialized view** instead of a table. No new asset type is needed — the same `starrocks.sql` asset covers tables, views, and materialized views, distinguished by `materialization.type` and the `starrocks` config block.
+
+Bruin supports both kinds of StarRocks materialized view: asynchronous (the default) and synchronous rollups.
+
+##### Asynchronous materialized views
+
+An async MV is a standalone object with its own distribution, partitioning, sort key, refresh schedule, and properties:
+
+- `materialization.cluster_by` → `DISTRIBUTED BY HASH(...)`, with `starrocks.buckets` adding `BUCKETS n`
+- `materialization.partition_by` → `PARTITION BY (...)`
+- `starrocks.order_by` → `ORDER BY (...)`, the MV's sort key
+- `starrocks.refresh` → the `REFRESH` clause:
+  - `trigger: immediate | deferred` → `REFRESH IMMEDIATE` / `REFRESH DEFERRED` (omitted defaults to StarRocks' own default, `IMMEDIATE`)
+  - `mode: async | manual` → `... ASYNC` / `... MANUAL`
+  - `start` / `every` (async mode only) → `START('...') EVERY (INTERVAL n UNIT)`; `every` is `"<count> <unit>"`, e.g. `1 day` → `EVERY (INTERVAL 1 DAY)`
+  - `refresh_on_run` — whether re-running the asset issues a `REFRESH MATERIALIZED VIEW` (see "Run behavior" below)
+- `starrocks.properties` — rendered as `PROPERTIES (...)`. Unlike tables, Bruin does **not** inject a default `replication_num` for materialized views; only the properties you set are emitted.
+
+An async materialized view must set `cluster_by` and/or `refresh` — StarRocks itself treats an MV with neither as a synchronous rollup, so Bruin rejects that combination with an error (set `starrocks.sync: true` instead if a rollup is what you want).
+
+```bruin-sql
+/* @bruin
+name: analytics.daily_active_users
+type: starrocks.sql
+materialization:
+  type: materialized_view
+  partition_by: date_trunc('day', event_date)   # -> PARTITION BY (date_trunc('day', event_date))
+  cluster_by: [user_id]                          # -> DISTRIBUTED BY HASH(user_id)
+starrocks:
+  buckets: 8                                       # -> BUCKETS 8
+  order_by: [event_date, user_id]                 # -> ORDER BY (event_date, user_id)
+  refresh:
+    trigger: deferred        # immediate | deferred   -> REFRESH DEFERRED
+    mode: async              # async | manual          -> ASYNC
+    start: "2025-01-01 10:00:00"                  # -> START('2025-01-01 10:00:00')
+    every: 1 day             # -> EVERY (INTERVAL 1 DAY)
+    refresh_on_run: false    # (optional) override re-run REFRESH trigger
+  properties:
+    partition_refresh_number: "4"
+    replication_num: "1"
+@bruin */
+
+SELECT event_date, user_id, count(*) AS events
+FROM analytics.raw_events
+GROUP BY event_date, user_id
+```
+
+This renders as:
+
+```sql
+CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`daily_active_users`
+DISTRIBUTED BY HASH(`user_id`) BUCKETS 8
+PARTITION BY (date_trunc('day', event_date))
+ORDER BY (`event_date`, `user_id`)
+REFRESH DEFERRED ASYNC START('2025-01-01 10:00:00') EVERY (INTERVAL 1 DAY)
+PROPERTIES ("partition_refresh_number" = "4", "replication_num" = "1")
+AS
+SELECT event_date, user_id, count(*) AS events
+FROM analytics.raw_events
+GROUP BY event_date, user_id;
+```
+
+##### Synchronous (rollup) materialized views
+
+Setting `starrocks.sync: true` creates a single-table StarRocks **rollup** materialized view instead of an async one. Sync MVs cannot set `cluster_by`, `partition_by`, `order_by`, or `refresh` — StarRocks manages distribution, partitioning, and refresh for rollups automatically, so Bruin rejects the asset if any of those are set alongside `sync: true`.
+
+```bruin-sql
+/* @bruin
+name: analytics.sales_rollup
+type: starrocks.sql
+materialization:
+  type: materialized_view
+starrocks:
+  sync: true          # single-table rollup; no refresh/distribution/partition/order_by allowed
+  properties:
+    replication_num: "1"
+@bruin */
+
+SELECT store_id, sum(amount) AS total
+FROM analytics.sales
+GROUP BY store_id
+```
+
+This renders as:
+
+```sql
+CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`sales_rollup`
+PROPERTIES ("replication_num" = "1")
+AS
+SELECT store_id, sum(amount) AS total
+FROM analytics.sales
+GROUP BY store_id;
+```
+
+##### Run behavior
+
+- **First run / normal re-run:** Bruin emits `CREATE MATERIALIZED VIEW IF NOT EXISTS ...`, which is a no-op if the MV already exists. When `refresh_on_run` resolves to `true`, Bruin follows it with a blocking `REFRESH MATERIALIZED VIEW <name> WITH SYNC MODE;` so a completed `bruin run` means the MV's data is up to date.
+- **`refresh_on_run` defaults:** `true` for `refresh.mode: manual` (a manual-mode MV never refreshes itself, so Bruin's run is the only trigger), `false` for `refresh.mode: async` (the MV refreshes on its own schedule already) or when no `refresh` block is set. An explicit `refresh_on_run: true`/`false` always overrides the default.
+- **`--full-refresh`:** Bruin issues `DROP MATERIALIZED VIEW IF EXISTS <name>;` followed by `CREATE MATERIALIZED VIEW <name> ...` (no `IF NOT EXISTS`), rebuilding the MV from scratch.
 
 ### `starrocks.seed`
 
