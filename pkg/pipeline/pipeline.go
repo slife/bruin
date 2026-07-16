@@ -3306,14 +3306,14 @@ func mergeStarRocksDefaults(target *StarRocksConfig, defaults StarRocksConfig) {
 	if target.Buckets == 0 {
 		target.Buckets = defaults.Buckets
 	}
-	if len(target.OrderBy) == 0 {
-		target.OrderBy = defaults.OrderBy
+	if len(target.OrderBy) == 0 && len(defaults.OrderBy) > 0 {
+		target.OrderBy = append([]string(nil), defaults.OrderBy...)
 	}
 	if !target.Sync {
 		target.Sync = defaults.Sync
 	}
 	if target.Refresh == nil {
-		target.Refresh = defaults.Refresh
+		target.Refresh = cloneStarRocksRefresh(defaults.Refresh)
 	}
 	if len(defaults.Properties) > 0 {
 		if target.Properties == nil {
@@ -3325,6 +3325,21 @@ func mergeStarRocksDefaults(target *StarRocksConfig, defaults StarRocksConfig) {
 			}
 		}
 	}
+}
+
+// cloneStarRocksRefresh returns a deep copy of r so that merging pipeline-level
+// StarRocks defaults into multiple sibling assets never lets them share the
+// same *StarRocksRefresh (or its RefreshOnRun *bool) by reference. Later
+// stages render fields such as Refresh.Start/Every in place, which would
+// otherwise corrupt the shared default for every other asset that inherited
+// it.
+func cloneStarRocksRefresh(r *StarRocksRefresh) *StarRocksRefresh {
+	if r == nil {
+		return nil
+	}
+	clone := *r
+	clone.RefreshOnRun = cloneBoolPtr(r.RefreshOnRun)
+	return &clone
 }
 
 func appendMissingStringValues[S ~[]E, E ~string](target *S, defaults S) {
