@@ -402,6 +402,36 @@ variants:
 	})
 }
 
+func TestRenderAssetStrings_StarRocksRefreshTemplated(t *testing.T) {
+	t.Parallel()
+
+	asset := &pipeline.Asset{
+		Name: "analytics.mv",
+		StarRocks: pipeline.StarRocksConfig{
+			OrderBy: []string{"{{ order_col }}"},
+			Refresh: &pipeline.StarRocksRefresh{
+				Mode:  "async",
+				Start: "{{ start_ts }}",
+				Every: "1 day",
+			},
+		},
+	}
+	render := func(tmpl string) (string, error) {
+		switch tmpl {
+		case "{{ order_col }}":
+			return "event_date", nil
+		case "{{ start_ts }}":
+			return "2025-01-01 10:00:00", nil
+		default:
+			return tmpl, nil
+		}
+	}
+	require.NoError(t, pipeline.RenderAssetTemplatedFields(asset, render))
+	assert.Equal(t, []string{"event_date"}, asset.StarRocks.OrderBy)
+	assert.Equal(t, "2025-01-01 10:00:00", asset.StarRocks.Refresh.Start)
+	assert.Equal(t, "1 day", asset.StarRocks.Refresh.Every)
+}
+
 // TestVariantVisitorCoversStringFields guards against silently regressing the
 // hand-written visitor in pkg/pipeline/variant.go. The test populates every
 // reachable string-typed field on a Pipeline + Asset with a sentinel template,
