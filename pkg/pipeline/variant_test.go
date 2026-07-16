@@ -482,11 +482,16 @@ func TestVariantVisitorCoversStringFields(t *testing.T) {
 		"Pipeline.Assets[].Hooks.Post[].Query":     true,
 
 		// Enum-typed strings on Asset.
-		"Pipeline.Assets[].Materialization.Type":                 true,
-		"Pipeline.Assets[].Materialization.Strategy":             true,
-		"Pipeline.Assets[].Materialization.TimeGranularity":      true,
-		"Pipeline.Assets[].Upstreams[].Type":                     true,
-		"Pipeline.Assets[].Upstreams[].Mode":                     true,
+		"Pipeline.Assets[].Materialization.Type":            true,
+		"Pipeline.Assets[].Materialization.Strategy":        true,
+		"Pipeline.Assets[].Materialization.TimeGranularity": true,
+		"Pipeline.Assets[].Upstreams[].Type":                true,
+		"Pipeline.Assets[].Upstreams[].Mode":                true,
+		// StarRocks refresh clause: Trigger (IMMEDIATE|DEFERRED) and Mode
+		// (ASYNC|MANUAL) are control/enum values, not user-templated text —
+		// only Start/Every (rendered above) carry free-form expressions.
+		"Pipeline.Assets[].StarRocks.Refresh.Trigger":            true,
+		"Pipeline.Assets[].StarRocks.Refresh.Mode":               true,
 		"Pipeline.DefaultValues.Materialization.Type":            true,
 		"Pipeline.DefaultValues.Materialization.Strategy":        true,
 		"Pipeline.DefaultValues.Materialization.TimeGranularity": true,
@@ -559,6 +564,12 @@ const (
 	sentinelMarker   = "{{ var.sentinel }}"
 )
 
+// refreshOnRunSentinel backs the *bool field on StarRocksRefresh in the
+// visitor-coverage fixture below; the walker only cares that the pointer is
+// non-nil so it recurses into the struct, the boolean value itself is
+// irrelevant.
+var refreshOnRunSentinel = true
+
 // buildFullyPopulatedPipelineForVisitorTest returns a Pipeline whose every
 // slice and map has at least one element, so the reflection walker has
 // something to recurse into. Field values themselves are arbitrary; the
@@ -601,6 +612,15 @@ func buildFullyPopulatedPipelineForVisitorTest() *pipeline.Pipeline {
 		StarRocks: pipeline.StarRocksConfig{
 			TableModel: "primary_key",
 			Properties: map[string]string{"replication_num": "1"},
+			OrderBy:    []string{"id"},
+			Sync:       true,
+			Refresh: &pipeline.StarRocksRefresh{
+				Trigger:      "manual",
+				Mode:         "async",
+				Start:        "start",
+				Every:        "every",
+				RefreshOnRun: &refreshOnRunSentinel,
+			},
 		},
 		Routing: &pipeline.RoutingConfig{EgressGateway: "gw"},
 	}
