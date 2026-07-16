@@ -202,6 +202,26 @@ environments:
 			},
 		},
 		{
+			name: "materialized-view-async",
+			workflow: e2e.Workflow{
+				Name: "materialized-view-async",
+				Steps: []e2e.Task{
+					runAsset("materialized view (async): create source", "materialized-view-async/assets/mv_src.sql"),
+					runAsset("materialized view (async): create async MV", "materialized-view-async/assets/mv_async.sql"),
+				},
+			},
+		},
+		{
+			name: "materialized-view-sync",
+			workflow: e2e.Workflow{
+				Name: "materialized-view-sync",
+				Steps: []e2e.Task{
+					runAsset("materialized view (sync): create source", "materialized-view-sync/assets/mv_src.sql"),
+					runAsset("materialized view (sync): create sync MV", "materialized-view-sync/assets/mv_sync.sql"),
+				},
+			},
+		},
+		{
 			name: "append-materialization",
 			workflow: e2e.Workflow{
 				Name: "append-materialization",
