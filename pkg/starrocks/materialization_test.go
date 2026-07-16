@@ -456,6 +456,29 @@ func TestMaterializer_Render(t *testing.T) {
 			query:   "SELECT 1",
 			wantErr: "distribution",
 		},
+		{
+			name: "async MV rejects negative buckets without distribution",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_buckets",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets: -1,
+					Refresh: &pipeline.StarRocksRefresh{Mode: "async"},
+				},
+			},
+			query:   "SELECT 1",
+			wantErr: "buckets",
+		},
+		{
+			name: "async MV rejects negative buckets with distribution",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_buckets_dist",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
+				StarRocks:       pipeline.StarRocksConfig{Buckets: -1},
+			},
+			query:   "SELECT id FROM analytics.src",
+			wantErr: "buckets",
+		},
 	}
 
 	for _, tt := range tests {

@@ -126,6 +126,10 @@ func renderMaterializedView(asset *pipeline.Asset, query string, fullRefresh boo
 			return "", errors.New("StarRocks async materialized view requires distribution (`cluster_by`) or a `refresh` block; set `starrocks.sync: true` for a rollup view")
 		}
 
+		if asset.StarRocks.Buckets < 0 {
+			return "", errors.New("starrocks buckets must be greater than zero")
+		}
+
 		if hasDistribution {
 			for _, column := range asset.Materialization.ClusterBy {
 				if strings.TrimSpace(column) == "" {
@@ -133,9 +137,6 @@ func renderMaterializedView(asset *pipeline.Asset, query string, fullRefresh boo
 				}
 			}
 			b.WriteString("\nDISTRIBUTED BY HASH(" + strings.Join(quoteColumnNames(asset.Materialization.ClusterBy), ", ") + ")")
-			if asset.StarRocks.Buckets < 0 {
-				return "", errors.New("starrocks buckets must be greater than zero")
-			}
 			if asset.StarRocks.Buckets > 0 {
 				fmt.Fprintf(&b, " BUCKETS %d", asset.StarRocks.Buckets)
 			}
