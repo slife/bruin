@@ -81,7 +81,7 @@ starrocks:
     replication_num: "1"
 ```
 
-When any of these are set (or `columns` are declared), Bruin emits a typed `CREATE TABLE` with the key clause, `PARTITION BY`, `DISTRIBUTED BY HASH(...) BUCKETS`, `ORDER BY`, and `PROPERTIES`. Otherwise it falls back to `CREATE TABLE ... AS SELECT`. Setting `order_by` on its own — with no `cluster_by`, `table_model`, `buckets`, or `columns` — is enough by itself to switch the asset onto the typed `CREATE TABLE` path.
+When any of these are set (or `columns` are declared), Bruin emits a typed `CREATE TABLE` with the key clause, `PARTITION BY`, `DISTRIBUTED BY HASH(...) BUCKETS`, `ORDER BY`, and `PROPERTIES`. Otherwise it falls back to `CREATE TABLE ... AS SELECT`. Setting `order_by` switches the asset onto the typed `CREATE TABLE` path (like `cluster_by`, `table_model`, or `buckets` do). Note the typed path requires `columns` to be declared.
 
 #### Merge materialization
 
