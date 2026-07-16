@@ -1745,6 +1745,79 @@ func TestEnsureMaterializationValuesAreValid(t *testing.T) {
 			},
 			wantErr: assert.NoError,
 		},
+		{
+			name: "starrocks sync materialized view with partition_by only is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:        pipeline.MaterializationTypeMaterializedView,
+						PartitionBy: "dt",
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Sync: true,
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"StarRocks sync materialized views (starrocks.sync: true) do not support cluster_by, partition_by, or order_by",
+			},
+		},
+		{
+			name: "starrocks sync materialized view with order_by only is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type: pipeline.MaterializationTypeMaterializedView,
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Sync:    true,
+						OrderBy: []string{"dt"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"StarRocks sync materialized views (starrocks.sync: true) do not support cluster_by, partition_by, or order_by",
+			},
+		},
+		{
+			name: "starrocks materialized view with uppercase refresh trigger and mode is successful",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Trigger: "IMMEDIATE", Mode: "ASYNC"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "starrocks materialized view with padded manual refresh mode is successful",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type: pipeline.MaterializationTypeMaterializedView,
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Mode: " manual "},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+		},
 	}
 	ctx := t.Context()
 	for _, tt := range tests {
