@@ -631,6 +631,23 @@ func taskDefinitionToAsset(definition taskDefinition) (*Asset, error) {
 		}
 	}
 
+	starRocksCfg := StarRocksConfig{
+		TableModel: definition.StarRocks.TableModel,
+		Buckets:    definition.StarRocks.Buckets,
+		Properties: definition.StarRocks.Properties,
+		OrderBy:    definition.StarRocks.OrderBy,
+		Sync:       definition.StarRocks.Sync,
+	}
+	if definition.StarRocks.Refresh != nil {
+		starRocksCfg.Refresh = &StarRocksRefresh{
+			Trigger:      definition.StarRocks.Refresh.Trigger,
+			Mode:         definition.StarRocks.Refresh.Mode,
+			Start:        definition.StarRocks.Refresh.Start,
+			Every:        definition.StarRocks.Refresh.Every,
+			RefreshOnRun: definition.StarRocks.Refresh.RefreshOnRun,
+		}
+	}
+
 	task := Asset{
 		ID:              hash(definition.Name),
 		URI:             definition.URI,
@@ -662,25 +679,7 @@ func taskDefinitionToAsset(definition taskDefinition) (*Asset, error) {
 			Buckets:       definition.Doris.Buckets,
 			Properties:    definition.Doris.Properties,
 		},
-		StarRocks: func() StarRocksConfig {
-			cfg := StarRocksConfig{
-				TableModel: definition.StarRocks.TableModel,
-				Buckets:    definition.StarRocks.Buckets,
-				Properties: definition.StarRocks.Properties,
-				OrderBy:    definition.StarRocks.OrderBy,
-				Sync:       definition.StarRocks.Sync,
-			}
-			if definition.StarRocks.Refresh != nil {
-				cfg.Refresh = &StarRocksRefresh{
-					Trigger:      definition.StarRocks.Refresh.Trigger,
-					Mode:         definition.StarRocks.Refresh.Mode,
-					Start:        definition.StarRocks.Refresh.Start,
-					Every:        definition.StarRocks.Refresh.Every,
-					RefreshOnRun: definition.StarRocks.Refresh.RefreshOnRun,
-				}
-			}
-			return cfg
-		}(),
+		StarRocks:         starRocksCfg,
 		Routing:           definition.Routing,
 		IntervalModifiers: definition.IntervalModifiers,
 		Domains:           definition.Domains,

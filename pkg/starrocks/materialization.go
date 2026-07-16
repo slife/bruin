@@ -187,19 +187,7 @@ func shouldRefreshOnRun(asset *pipeline.Asset) bool {
 // buildMaterializedViewProperties renders PROPERTIES for a materialized view.
 // Unlike tables, it does NOT inject a default replication_num.
 func buildMaterializedViewProperties(asset *pipeline.Asset) string {
-	if len(asset.StarRocks.Properties) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(asset.StarRocks.Properties))
-	for key := range asset.StarRocks.Properties {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	clauses := make([]string, 0, len(keys))
-	for _, key := range keys {
-		clauses = append(clauses, fmt.Sprintf("\"%s\" = \"%s\"", escapeStarRocksProperty(key), escapeStarRocksProperty(asset.StarRocks.Properties[key])))
-	}
-	return strings.Join(clauses, ", ")
+	return renderPropertyClauses(asset.StarRocks.Properties)
 }
 
 func buildAppendQuery(asset *pipeline.Asset, query string) (string, error) {
@@ -418,11 +406,10 @@ func buildRefreshClause(refresh *pipeline.StarRocksRefresh) (string, error) {
 		return "", fmt.Errorf("invalid refresh.trigger %q: expected \"immediate\" or \"deferred\"", refresh.Trigger)
 	}
 
-	mode := strings.ToLower(strings.TrimSpace(refresh.Mode))
 	start := strings.TrimSpace(refresh.Start)
 	every := strings.TrimSpace(refresh.Every)
 
-	switch mode {
+	switch strings.ToLower(strings.TrimSpace(refresh.Mode)) {
 	case "manual":
 		if start != "" || every != "" {
 			return "", errors.New("refresh.start and refresh.every require refresh.mode \"async\"")
@@ -712,6 +699,16 @@ func buildStarRocksProperties(asset *pipeline.Asset) string {
 	}
 	for key, value := range asset.StarRocks.Properties {
 		properties[key] = value
+	}
+	return renderPropertyClauses(properties)
+}
+
+// renderPropertyClauses renders a StarRocks PROPERTIES body ("k" = "v", ...)
+// from the given map, with keys sorted for deterministic output and both keys
+// and values escaped. Returns "" for an empty map.
+func renderPropertyClauses(properties map[string]string) string {
+	if len(properties) == 0 {
+		return ""
 	}
 
 	keys := make([]string, 0, len(properties))
