@@ -7,6 +7,6 @@ materialization:
   strategy: create+replace
 @bruin */
 
-SELECT 1 AS id, '2024-01-01' AS event_date, 10 AS value
+SELECT 1 AS id, CAST('2024-01-01' AS DATE) AS event_date, 10 AS value
 UNION ALL
-SELECT 2 AS id, '2024-01-02' AS event_date, 5 AS value
+SELECT 2 AS id, CAST('2024-01-02' AS DATE) AS event_date, 5 AS value

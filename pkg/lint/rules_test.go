@@ -1818,6 +1818,43 @@ func TestEnsureMaterializationValuesAreValid(t *testing.T) {
 			},
 			wantErr: assert.NoError,
 		},
+		{
+			name: "starrocks async materialized view with malformed refresh.every is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Mode: "async", Every: "soon"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"materialization refresh.every must be in the form '<count> <unit>', e.g. '1 day'",
+			},
+		},
+		{
+			name: "starrocks async materialized view with valid refresh.every is successful",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Mode: "async", Every: "1 day"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+		},
 	}
 	ctx := t.Context()
 	for _, tt := range tests {

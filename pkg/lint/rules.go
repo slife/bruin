@@ -1548,6 +1548,11 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			if strings.EqualFold(strings.TrimSpace(refresh.Mode), "manual") && (strings.TrimSpace(refresh.Start) != "" || strings.TrimSpace(refresh.Every) != "") {
 				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.start/refresh.every require refresh.mode 'async'"})
 			}
+			if every := strings.TrimSpace(refresh.Every); every != "" {
+				if len(strings.Fields(every)) != 2 {
+					issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.every must be in the form '<count> <unit>', e.g. '1 day'"})
+				}
+			}
 		}
 	default:
 		issues = append(issues, &Issue{
