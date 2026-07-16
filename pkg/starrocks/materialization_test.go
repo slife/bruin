@@ -334,6 +334,128 @@ func TestMaterializer_Render(t *testing.T) {
 			query:   "SELECT id FROM source",
 			wantErr: "materialization strategy scd2_by_column is not supported",
 		},
+		{
+			name: "async MV minimal with distribution",
+			asset: &pipeline.Asset{
+				Name:            "analytics.mv_users",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"user_id"}},
+				StarRocks:       pipeline.StarRocksConfig{Buckets: 8},
+			},
+			query: "SELECT user_id FROM analytics.events",
+			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_users`\n" +
+				"DISTRIBUTED BY HASH(`user_id`) BUCKETS 8\n" +
+				"AS\n" +
+				"SELECT user_id FROM analytics.events;",
+		},
+		{
+			name: "async MV full clauses",
+			asset: &pipeline.Asset{
+				Name: "analytics.dau",
+				Materialization: pipeline.Materialization{
+					Type:        pipeline.MaterializationTypeMaterializedView,
+					PartitionBy: "date_trunc('day', event_date)",
+					ClusterBy:   []string{"user_id"},
+				},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets:    4,
+					OrderBy:    []string{"event_date", "user_id"},
+					Refresh:    &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: "async", Start: "2025-01-01 10:00:00", Every: "1 day"},
+					Properties: map[string]string{"partition_refresh_number": "4"},
+				},
+			},
+			query: "SELECT event_date, user_id FROM analytics.events",
+			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`dau`\n" +
+				"DISTRIBUTED BY HASH(`user_id`) BUCKETS 4\n" +
+				"PARTITION BY (date_trunc('day', event_date))\n" +
+				"ORDER BY (`event_date`, `user_id`)\n" +
+				"REFRESH DEFERRED ASYNC START('2025-01-01 10:00:00') EVERY (INTERVAL 1 DAY)\n" +
+				"PROPERTIES (\"partition_refresh_number\" = \"4\")\n" +
+				"AS\n" +
+				"SELECT event_date, user_id FROM analytics.events;",
+		},
+		{
+			name: "async MV manual mode triggers refresh on run",
+			asset: &pipeline.Asset{
+				Name:            "analytics.mv_manual",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets: 2,
+					Refresh: &pipeline.StarRocksRefresh{Mode: "manual"},
+				},
+			},
+			query: "SELECT id FROM analytics.src",
+			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_manual`\n" +
+				"DISTRIBUTED BY HASH(`id`) BUCKETS 2\n" +
+				"REFRESH MANUAL\n" +
+				"AS\n" +
+				"SELECT id FROM analytics.src;\n" +
+				"REFRESH MATERIALIZED VIEW `analytics`.`mv_manual` WITH SYNC MODE;",
+		},
+		{
+			name: "async MV manual refresh_on_run false suppresses refresh",
+			asset: &pipeline.Asset{
+				Name:            "analytics.mv_manual2",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets: 2,
+					Refresh: &pipeline.StarRocksRefresh{Mode: "manual", RefreshOnRun: boolPtr(false)},
+				},
+			},
+			query: "SELECT id FROM analytics.src",
+			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_manual2`\n" +
+				"DISTRIBUTED BY HASH(`id`) BUCKETS 2\n" +
+				"REFRESH MANUAL\n" +
+				"AS\n" +
+				"SELECT id FROM analytics.src;",
+		},
+		{
+			name: "sync rollup MV",
+			asset: &pipeline.Asset{
+				Name:            "analytics.sales_rollup",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
+				StarRocks:       pipeline.StarRocksConfig{Sync: true, Properties: map[string]string{"replication_num": "1"}},
+			},
+			query: "SELECT store_id, sum(amount) AS total FROM analytics.sales GROUP BY store_id",
+			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`sales_rollup`\n" +
+				"PROPERTIES (\"replication_num\" = \"1\")\n" +
+				"AS\n" +
+				"SELECT store_id, sum(amount) AS total FROM analytics.sales GROUP BY store_id;",
+		},
+		{
+			name: "async MV full refresh drops and recreates",
+			asset: &pipeline.Asset{
+				Name:            "analytics.mv_fr",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
+				StarRocks:       pipeline.StarRocksConfig{Buckets: 2, Refresh: &pipeline.StarRocksRefresh{Mode: "async"}},
+			},
+			query:       "SELECT id FROM analytics.src",
+			fullRefresh: true,
+			want: "DROP MATERIALIZED VIEW IF EXISTS `analytics`.`mv_fr`;\n" +
+				"CREATE MATERIALIZED VIEW `analytics`.`mv_fr`\n" +
+				"DISTRIBUTED BY HASH(`id`) BUCKETS 2\n" +
+				"REFRESH ASYNC\n" +
+				"AS\n" +
+				"SELECT id FROM analytics.src;",
+		},
+		{
+			name: "sync MV rejects refresh",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_sync",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
+				StarRocks:       pipeline.StarRocksConfig{Sync: true, Refresh: &pipeline.StarRocksRefresh{Mode: "async"}},
+			},
+			query:   "SELECT 1",
+			wantErr: "sync",
+		},
+		{
+			name: "async MV requires distribution or refresh",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_async",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
+			},
+			query:   "SELECT 1",
+			wantErr: "distribution",
+		},
 	}
 
 	for _, tt := range tests {
@@ -352,6 +474,8 @@ func TestMaterializer_Render(t *testing.T) {
 		})
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 func TestQuoteIdentifier(t *testing.T) {
 	t.Parallel()
