@@ -65,6 +65,8 @@ const (
 	materializationPartitionByNotSupportedForViews    = "Materialization partition by is not supported for views because views cannot be partitioned"
 	materializationIncrementalKeyNotSupportedForViews = "Materialization incremental key is not supported for views because views cannot be updated incrementally"
 	materializationClusterByNotSupportedForViews      = "Materialization cluster by is not supported for views because views cannot be clustered"
+	starRocksRefreshModeAsync                         = "async"
+	starRocksRefreshModeManual                        = "manual"
 )
 
 var validIDRegexCompiled = regexp.MustCompile(validIDRegex)
@@ -1358,11 +1360,27 @@ func EnsureAssetNotificationsAreValid(ctx context.Context, p *pipeline.Pipeline,
 
 func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *pipeline.Pipeline, asset *pipeline.Asset) ([]*Issue, error) {
 	issues := make([]*Issue, 0)
+	materializationType := asset.Materialization.Type
+
+	if asset.StarRocks.Sync && materializationType != pipeline.MaterializationTypeMaterializedView {
+		issues = append(issues, &Issue{Task: asset, Description: "starrocks.sync is only supported for materialized views"})
+	}
+	if asset.StarRocks.Refresh != nil && materializationType != pipeline.MaterializationTypeMaterializedView {
+		issues = append(issues, &Issue{Task: asset, Description: "starrocks.refresh is only supported for materialized views"})
+	}
+	if len(asset.StarRocks.OrderBy) > 0 && materializationType != pipeline.MaterializationTypeTable && materializationType != pipeline.MaterializationTypeMaterializedView {
+		issues = append(issues, &Issue{Task: asset, Description: "starrocks.order_by is only supported for tables and materialized views"})
+	}
+
+	if materializationType == pipeline.MaterializationTypeMaterializedView && asset.Type != pipeline.AssetTypeStarRocksQuery {
+		issues = append(issues, &Issue{Task: asset, Description: "Materialization type 'materialized_view' is only supported for StarRocks SQL assets"})
+		return issues, nil
+	}
 	if asset.Type == pipeline.AssetTypePython || asset.Type == pipeline.AssetTypeIngestr {
 		return issues, nil
 	}
 
-	switch asset.Materialization.Type {
+	switch materializationType {
 	case pipeline.MaterializationTypeNone:
 		return issues, nil
 	case pipeline.MaterializationTypeView:
@@ -1523,6 +1541,18 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			})
 		}
 	case pipeline.MaterializationTypeMaterializedView:
+		switch asset.Materialization.Strategy {
+		case pipeline.MaterializationStrategyNone, pipeline.MaterializationStrategyCreateReplace:
+		default:
+			issues = append(issues, &Issue{
+				Task: asset,
+				Description: fmt.Sprintf(
+					"Materialization strategy '%s' is not supported for StarRocks materialized views; available strategies are: [none create+replace]",
+					asset.Materialization.Strategy,
+				),
+			})
+		}
+
 		refresh := asset.StarRocks.Refresh
 		if asset.StarRocks.Sync {
 			if refresh != nil {
@@ -1535,20 +1565,26 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			issues = append(issues, &Issue{Task: asset, Description: "StarRocks async materialized view requires distribution (cluster_by) or a refresh block; set starrocks.sync: true for a rollup view"})
 		}
 		if refresh != nil {
+			mode := strings.ToLower(strings.TrimSpace(refresh.Mode))
 			switch strings.ToLower(strings.TrimSpace(refresh.Trigger)) {
 			case "", "immediate", "deferred":
 			default:
 				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.trigger must be 'immediate' or 'deferred'"})
 			}
-			switch strings.ToLower(strings.TrimSpace(refresh.Mode)) {
-			case "", "async", "manual":
+			switch mode {
+			case "", starRocksRefreshModeAsync, starRocksRefreshModeManual:
 			default:
 				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.mode must be 'async' or 'manual'"})
 			}
-			if strings.EqualFold(strings.TrimSpace(refresh.Mode), "manual") && (strings.TrimSpace(refresh.Start) != "" || strings.TrimSpace(refresh.Every) != "") {
+			start := strings.TrimSpace(refresh.Start)
+			every := strings.TrimSpace(refresh.Every)
+			if mode == starRocksRefreshModeManual && (start != "" || every != "") {
 				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.start/refresh.every require refresh.mode 'async'"})
 			}
-			if every := strings.TrimSpace(refresh.Every); every != "" {
+			if (mode == "" || mode == starRocksRefreshModeAsync) && start != "" && every == "" {
+				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.start requires refresh.every"})
+			}
+			if every != "" {
 				if len(strings.Fields(every)) != 2 {
 					issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.every must be in the form '<count> <unit>', e.g. '1 day'"})
 				}

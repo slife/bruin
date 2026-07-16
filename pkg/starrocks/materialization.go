@@ -18,6 +18,8 @@ const (
 	starRocksTableModelDuplicateKey = "duplicate_key"
 	starRocksTableModelUniqueKey    = "unique_key"
 	starRocksTableModelPrimaryKey   = "primary_key"
+	starRocksRefreshModeAsync       = "async"
+	starRocksRefreshModeManual      = "manual"
 )
 
 func NewMaterializer(fullRefresh bool) *pipeline.Materializer {
@@ -142,16 +144,16 @@ func renderMaterializedView(asset *pipeline.Asset, query string, fullRefresh boo
 			}
 		}
 
+		if refreshClause != "" {
+			b.WriteString("\n" + refreshClause)
+		}
+
 		if partitionBy := strings.TrimSpace(asset.Materialization.PartitionBy); partitionBy != "" {
 			b.WriteString("\nPARTITION BY (" + partitionBy + ")")
 		}
 
 		if len(asset.StarRocks.OrderBy) > 0 {
 			b.WriteString("\nORDER BY (" + strings.Join(quoteColumnNames(asset.StarRocks.OrderBy), ", ") + ")")
-		}
-
-		if refreshClause != "" {
-			b.WriteString("\n" + refreshClause)
 		}
 	}
 
@@ -181,7 +183,7 @@ func shouldRefreshOnRun(asset *pipeline.Asset) bool {
 	if refresh.RefreshOnRun != nil {
 		return *refresh.RefreshOnRun
 	}
-	return strings.EqualFold(strings.TrimSpace(refresh.Mode), "manual")
+	return strings.EqualFold(strings.TrimSpace(refresh.Mode), starRocksRefreshModeManual)
 }
 
 // buildMaterializedViewProperties renders PROPERTIES for a materialized view.
@@ -410,13 +412,16 @@ func buildRefreshClause(refresh *pipeline.StarRocksRefresh) (string, error) {
 	every := strings.TrimSpace(refresh.Every)
 
 	switch strings.ToLower(strings.TrimSpace(refresh.Mode)) {
-	case "manual":
+	case starRocksRefreshModeManual:
 		if start != "" || every != "" {
 			return "", errors.New("refresh.start and refresh.every require refresh.mode \"async\"")
 		}
 		parts = append(parts, "MANUAL")
-	case "async", "":
+	case starRocksRefreshModeAsync, "":
 		asyncParts := []string{"ASYNC"}
+		if start != "" && every == "" {
+			return "", errors.New("refresh.start requires refresh.every")
+		}
 		if start != "" {
 			asyncParts = append(asyncParts, fmt.Sprintf("START('%s')", start))
 		}

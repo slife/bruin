@@ -412,16 +412,16 @@ func TestMaterializer_Render(t *testing.T) {
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets:    4,
 					OrderBy:    []string{"event_date", "user_id"},
-					Refresh:    &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: "async", Start: "2025-01-01 10:00:00", Every: "1 day"},
+					Refresh:    &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00", Every: "1 day"},
 					Properties: map[string]string{"partition_refresh_number": "4"},
 				},
 			},
 			query: "SELECT event_date, user_id FROM analytics.events",
 			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`dau`\n" +
 				"DISTRIBUTED BY HASH(`user_id`) BUCKETS 4\n" +
+				"REFRESH DEFERRED ASYNC START('2025-01-01 10:00:00') EVERY (INTERVAL 1 DAY)\n" +
 				"PARTITION BY (date_trunc('day', event_date))\n" +
 				"ORDER BY (`event_date`, `user_id`)\n" +
-				"REFRESH DEFERRED ASYNC START('2025-01-01 10:00:00') EVERY (INTERVAL 1 DAY)\n" +
 				"PROPERTIES (\"partition_refresh_number\" = \"4\")\n" +
 				"AS\n" +
 				"SELECT event_date, user_id FROM analytics.events;",
@@ -433,7 +433,7 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
-					Refresh: &pipeline.StarRocksRefresh{Mode: "manual"},
+					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual},
 				},
 			},
 			query: "SELECT id FROM analytics.src",
@@ -451,7 +451,7 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
-					Refresh: &pipeline.StarRocksRefresh{Mode: "manual", RefreshOnRun: boolPtr(false)},
+					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual, RefreshOnRun: boolPtr(false)},
 				},
 			},
 			query: "SELECT id FROM analytics.src",
@@ -479,7 +479,7 @@ func TestMaterializer_Render(t *testing.T) {
 			asset: &pipeline.Asset{
 				Name:            "analytics.mv_fr",
 				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
-				StarRocks:       pipeline.StarRocksConfig{Buckets: 2, Refresh: &pipeline.StarRocksRefresh{Mode: "async"}},
+				StarRocks:       pipeline.StarRocksConfig{Buckets: 2, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync}},
 			},
 			query:       "SELECT id FROM analytics.src",
 			fullRefresh: true,
@@ -495,7 +495,7 @@ func TestMaterializer_Render(t *testing.T) {
 			asset: &pipeline.Asset{
 				Name:            "analytics.bad_sync",
 				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
-				StarRocks:       pipeline.StarRocksConfig{Sync: true, Refresh: &pipeline.StarRocksRefresh{Mode: "async"}},
+				StarRocks:       pipeline.StarRocksConfig{Sync: true, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync}},
 			},
 			query:   "SELECT 1",
 			wantErr: "sync",
@@ -516,7 +516,7 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: -1,
-					Refresh: &pipeline.StarRocksRefresh{Mode: "async"},
+					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
 				},
 			},
 			query:   "SELECT 1",
@@ -570,22 +570,23 @@ func TestBuildRefreshClause(t *testing.T) {
 		wantErr string
 	}{
 		{name: "nil refresh yields empty", refresh: nil, want: ""},
-		{name: "manual", refresh: &pipeline.StarRocksRefresh{Mode: "manual"}, want: "REFRESH MANUAL"},
-		{name: "async bare", refresh: &pipeline.StarRocksRefresh{Mode: "async"}, want: "REFRESH ASYNC"},
+		{name: "manual", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual}, want: "REFRESH MANUAL"},
+		{name: "async bare", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync}, want: "REFRESH ASYNC"},
 		{
 			name:    "deferred async scheduled",
-			refresh: &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: "async", Start: "2025-01-01 10:00:00", Every: "1 day"},
+			refresh: &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00", Every: "1 day"},
 			want:    "REFRESH DEFERRED ASYNC START('2025-01-01 10:00:00') EVERY (INTERVAL 1 DAY)",
 		},
 		{
 			name:    "immediate async every only",
-			refresh: &pipeline.StarRocksRefresh{Trigger: "immediate", Mode: "async", Every: "30 minute"},
+			refresh: &pipeline.StarRocksRefresh{Trigger: "immediate", Mode: starRocksRefreshModeAsync, Every: "30 minute"},
 			want:    "REFRESH IMMEDIATE ASYNC EVERY (INTERVAL 30 MINUTE)",
 		},
-		{name: "bad trigger", refresh: &pipeline.StarRocksRefresh{Trigger: "eventually", Mode: "async"}, wantErr: "refresh.trigger"},
+		{name: "bad trigger", refresh: &pipeline.StarRocksRefresh{Trigger: "eventually", Mode: starRocksRefreshModeAsync}, wantErr: "refresh.trigger"},
 		{name: "bad mode", refresh: &pipeline.StarRocksRefresh{Mode: "sometimes"}, wantErr: "refresh.mode"},
-		{name: "start with manual", refresh: &pipeline.StarRocksRefresh{Mode: "manual", Start: "2025-01-01 10:00:00"}, wantErr: "start"},
-		{name: "malformed every", refresh: &pipeline.StarRocksRefresh{Mode: "async", Every: "soon"}, wantErr: "every"},
+		{name: "start with manual", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual, Start: "2025-01-01 10:00:00"}, wantErr: "start"},
+		{name: "async start without every", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00"}, wantErr: "refresh.start requires refresh.every"},
+		{name: "malformed every", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "soon"}, wantErr: "every"},
 	}
 
 	for _, tt := range tests {
