@@ -3500,3 +3500,12 @@ func TestAsset_PrefixUpstreams(t *testing.T) {
 	assert.Equal(t, "raw.dev_analytics.events", a.Upstreams[1].Value)
 	assert.Equal(t, "raw.analytics.events", a.Upstreams[2].Value)
 }
+
+func TestStarRocksConfig_IsZeroAndMerge(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, pipeline.StarRocksConfig{}.IsZero())
+	assert.False(t, pipeline.StarRocksConfig{Sync: true}.IsZero())
+	assert.False(t, pipeline.StarRocksConfig{OrderBy: []string{"a"}}.IsZero())
+	assert.False(t, pipeline.StarRocksConfig{Refresh: &pipeline.StarRocksRefresh{Mode: "async"}}.IsZero())
+}
