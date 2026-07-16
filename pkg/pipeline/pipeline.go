@@ -580,9 +580,10 @@ type (
 )
 
 const (
-	MaterializationTypeNone  MaterializationType = ""
-	MaterializationTypeView  MaterializationType = "view"
-	MaterializationTypeTable MaterializationType = "table"
+	MaterializationTypeNone             MaterializationType = ""
+	MaterializationTypeView             MaterializationType = "view"
+	MaterializationTypeTable            MaterializationType = "table"
+	MaterializationTypeMaterializedView MaterializationType = "materialized_view"
 )
 
 type (

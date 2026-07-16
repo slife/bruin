@@ -92,6 +92,33 @@ func TestMaterializer_Render(t *testing.T) {
 	}
 }
 
+func TestMaterializer_MaterializedViewFullRefreshOverride(t *testing.T) {
+	t.Parallel()
+
+	calls := map[MaterializationStrategy]bool{}
+	record := func(s MaterializationStrategy) MaterializerFunc {
+		return func(_ *Asset, _ string) (string, error) {
+			calls[s] = true
+			return "", nil
+		}
+	}
+	m := &Materializer{
+		FullRefresh: true,
+		MaterializationMap: AssetMaterializationMap{
+			MaterializationTypeMaterializedView: {
+				MaterializationStrategyNone:          record(MaterializationStrategyNone),
+				MaterializationStrategyCreateReplace: record(MaterializationStrategyCreateReplace),
+			},
+		},
+	}
+	asset := &Asset{Materialization: Materialization{Type: MaterializationTypeMaterializedView}}
+
+	_, err := m.Render(asset, "SELECT 1")
+	require.NoError(t, err)
+	assert.True(t, calls[MaterializationStrategyCreateReplace], "full refresh should route MV to create+replace")
+	assert.False(t, calls[MaterializationStrategyNone], "full refresh must not use the None builder")
+}
+
 type stringMaterializer struct {
 	out string
 }
