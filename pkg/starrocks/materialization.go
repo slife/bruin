@@ -266,6 +266,65 @@ func buildDDLQuery(asset *pipeline.Asset, _ string) (string, error) {
 	return statement + ";", nil
 }
 
+// buildRefreshClause assembles a StarRocks async materialized-view REFRESH
+// clause from the structured refresh config. Returns "" when refresh is nil.
+func buildRefreshClause(refresh *pipeline.StarRocksRefresh) (string, error) {
+	if refresh == nil {
+		return "", nil
+	}
+
+	parts := []string{"REFRESH"}
+
+	switch strings.ToLower(strings.TrimSpace(refresh.Trigger)) {
+	case "":
+		// omit; StarRocks defaults to IMMEDIATE
+	case "immediate":
+		parts = append(parts, "IMMEDIATE")
+	case "deferred":
+		parts = append(parts, "DEFERRED")
+	default:
+		return "", fmt.Errorf("invalid refresh.trigger %q: expected \"immediate\" or \"deferred\"", refresh.Trigger)
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(refresh.Mode))
+	start := strings.TrimSpace(refresh.Start)
+	every := strings.TrimSpace(refresh.Every)
+
+	switch mode {
+	case "manual":
+		if start != "" || every != "" {
+			return "", errors.New("refresh.start and refresh.every require refresh.mode \"async\"")
+		}
+		parts = append(parts, "MANUAL")
+	case "async", "":
+		asyncParts := []string{"ASYNC"}
+		if start != "" {
+			asyncParts = append(asyncParts, fmt.Sprintf("START('%s')", start))
+		}
+		if every != "" {
+			interval, err := formatEveryInterval(every)
+			if err != nil {
+				return "", err
+			}
+			asyncParts = append(asyncParts, fmt.Sprintf("EVERY (%s)", interval))
+		}
+		parts = append(parts, strings.Join(asyncParts, " "))
+	default:
+		return "", fmt.Errorf("invalid refresh.mode %q: expected \"async\" or \"manual\"", refresh.Mode)
+	}
+
+	return strings.Join(parts, " "), nil
+}
+
+// formatEveryInterval turns "1 day" into "INTERVAL 1 DAY".
+func formatEveryInterval(every string) (string, error) {
+	fields := strings.Fields(every)
+	if len(fields) != 2 {
+		return "", fmt.Errorf("invalid refresh.every %q: expected \"<count> <unit>\" such as \"1 day\"", every)
+	}
+	return fmt.Sprintf("INTERVAL %s %s", fields[0], strings.ToUpper(fields[1])), nil
+}
+
 func requiresTypedCreateTable(asset *pipeline.Asset) bool {
 	return asset.Materialization.Strategy == pipeline.MaterializationStrategyMerge ||
 		strings.TrimSpace(asset.StarRocks.TableModel) != "" ||

@@ -359,3 +359,46 @@ func TestQuoteIdentifier(t *testing.T) {
 	assert.Equal(t, "`analytics`.`orders`", quoteIdentifier("analytics.orders"))
 	assert.Equal(t, "`odd``name`", quoteIdentifier("odd`name"))
 }
+
+func TestBuildRefreshClause(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		refresh *pipeline.StarRocksRefresh
+		want    string
+		wantErr string
+	}{
+		{name: "nil refresh yields empty", refresh: nil, want: ""},
+		{name: "manual", refresh: &pipeline.StarRocksRefresh{Mode: "manual"}, want: "REFRESH MANUAL"},
+		{name: "async bare", refresh: &pipeline.StarRocksRefresh{Mode: "async"}, want: "REFRESH ASYNC"},
+		{
+			name:    "deferred async scheduled",
+			refresh: &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: "async", Start: "2025-01-01 10:00:00", Every: "1 day"},
+			want:    "REFRESH DEFERRED ASYNC START('2025-01-01 10:00:00') EVERY (INTERVAL 1 DAY)",
+		},
+		{
+			name:    "immediate async every only",
+			refresh: &pipeline.StarRocksRefresh{Trigger: "immediate", Mode: "async", Every: "30 minute"},
+			want:    "REFRESH IMMEDIATE ASYNC EVERY (INTERVAL 30 MINUTE)",
+		},
+		{name: "bad trigger", refresh: &pipeline.StarRocksRefresh{Trigger: "eventually", Mode: "async"}, wantErr: "refresh.trigger"},
+		{name: "bad mode", refresh: &pipeline.StarRocksRefresh{Mode: "sometimes"}, wantErr: "refresh.mode"},
+		{name: "start with manual", refresh: &pipeline.StarRocksRefresh{Mode: "manual", Start: "2025-01-01 10:00:00"}, wantErr: "start"},
+		{name: "malformed every", refresh: &pipeline.StarRocksRefresh{Mode: "async", Every: "soon"}, wantErr: "every"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := buildRefreshClause(tt.refresh)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
