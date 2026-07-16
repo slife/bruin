@@ -462,7 +462,8 @@ func requiresTypedCreateTable(asset *pipeline.Asset) bool {
 		strings.TrimSpace(asset.StarRocks.TableModel) != "" ||
 		len(asset.Materialization.ClusterBy) > 0 ||
 		strings.TrimSpace(asset.Materialization.PartitionBy) != "" ||
-		asset.StarRocks.Buckets != 0
+		asset.StarRocks.Buckets != 0 ||
+		len(asset.StarRocks.OrderBy) > 0
 }
 
 func validateMergeAsset(asset *pipeline.Asset) error {
@@ -523,13 +524,18 @@ func buildCreateTableStatement(asset *pipeline.Asset, ifNotExists bool) (string,
 		partitionClause = fmt.Sprintf("PARTITION BY (%s)\n", partitionBy)
 	}
 
+	orderByClause := ""
+	if len(asset.StarRocks.OrderBy) > 0 {
+		orderByClause = "ORDER BY (" + strings.Join(quoteColumnNames(asset.StarRocks.OrderBy), ", ") + ")\n"
+	}
+
 	return fmt.Sprintf(
 		`%s%s (
 %s
 )
 %s(%s)
 %sDISTRIBUTED BY HASH(%s) BUCKETS %d
-PROPERTIES (%s)`,
+%sPROPERTIES (%s)`,
 		createPrefix,
 		quoteIdentifier(asset.Name),
 		strings.Join(columnDefs, ",\n"),
@@ -538,6 +544,7 @@ PROPERTIES (%s)`,
 		partitionClause,
 		strings.Join(quoteColumnNames(distributedBy), ", "),
 		buckets,
+		orderByClause,
 		buildStarRocksProperties(asset),
 	), nil
 }
