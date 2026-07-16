@@ -1522,6 +1522,33 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 				),
 			})
 		}
+	case pipeline.MaterializationTypeMaterializedView:
+		refresh := asset.StarRocks.Refresh
+		if asset.StarRocks.Sync {
+			if refresh != nil {
+				issues = append(issues, &Issue{Task: asset, Description: "StarRocks sync materialized views (starrocks.sync: true) do not support 'refresh'"})
+			}
+			if len(asset.Materialization.ClusterBy) > 0 || asset.Materialization.PartitionBy != "" || len(asset.StarRocks.OrderBy) > 0 {
+				issues = append(issues, &Issue{Task: asset, Description: "StarRocks sync materialized views (starrocks.sync: true) do not support cluster_by, partition_by, or order_by"})
+			}
+		} else if len(asset.Materialization.ClusterBy) == 0 && refresh == nil {
+			issues = append(issues, &Issue{Task: asset, Description: "StarRocks async materialized view requires distribution (cluster_by) or a refresh block; set starrocks.sync: true for a rollup view"})
+		}
+		if refresh != nil {
+			switch strings.ToLower(strings.TrimSpace(refresh.Trigger)) {
+			case "", "immediate", "deferred":
+			default:
+				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.trigger must be 'immediate' or 'deferred'"})
+			}
+			switch strings.ToLower(strings.TrimSpace(refresh.Mode)) {
+			case "", "async", "manual":
+			default:
+				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.mode must be 'async' or 'manual'"})
+			}
+			if strings.EqualFold(strings.TrimSpace(refresh.Mode), "manual") && (strings.TrimSpace(refresh.Start) != "" || strings.TrimSpace(refresh.Every) != "") {
+				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.start/refresh.every require refresh.mode 'async'"})
+			}
+		}
 	default:
 		issues = append(issues, &Issue{
 			Task: asset,
@@ -1531,6 +1558,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 				[]pipeline.MaterializationType{
 					pipeline.MaterializationTypeView,
 					pipeline.MaterializationTypeTable,
+					pipeline.MaterializationTypeMaterializedView,
 				},
 			),
 		})

@@ -1429,6 +1429,7 @@ func TestEnsureMaterializationValuesAreValid(t *testing.T) {
 					[]pipeline.MaterializationType{
 						pipeline.MaterializationTypeView,
 						pipeline.MaterializationTypeTable,
+						pipeline.MaterializationTypeMaterializedView,
 					},
 				),
 			},
@@ -1597,6 +1598,152 @@ func TestEnsureMaterializationValuesAreValid(t *testing.T) {
 			want: []string{
 				"Materialization strategy 'datavault_hub' requires the 'columns' field to be set with actual columns",
 			},
+		},
+		{
+			name: "starrocks async materialized view with cluster_by is valid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "starrocks async materialized view without cluster_by or refresh is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type: pipeline.MaterializationTypeMaterializedView,
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"StarRocks async materialized view requires distribution (cluster_by) or a refresh block; set starrocks.sync: true for a rollup view",
+			},
+		},
+		{
+			name: "starrocks sync materialized view with refresh is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type: pipeline.MaterializationTypeMaterializedView,
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Sync:    true,
+						Refresh: &pipeline.StarRocksRefresh{Trigger: "immediate"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"StarRocks sync materialized views (starrocks.sync: true) do not support 'refresh'",
+			},
+		},
+		{
+			name: "starrocks sync materialized view with cluster_by is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Sync: true,
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"StarRocks sync materialized views (starrocks.sync: true) do not support cluster_by, partition_by, or order_by",
+			},
+		},
+		{
+			name: "starrocks materialized view with bad refresh trigger is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Trigger: "eventually", Mode: "async"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"materialization refresh.trigger must be 'immediate' or 'deferred'",
+			},
+		},
+		{
+			name: "starrocks materialized view with bad refresh mode is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Trigger: "immediate", Mode: "whenever"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"materialization refresh.mode must be 'async' or 'manual'",
+			},
+		},
+		{
+			name: "starrocks materialized view with manual refresh mode and start/every is invalid",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type:      pipeline.MaterializationTypeMaterializedView,
+						ClusterBy: []string{"id"},
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Mode: "manual", Start: "2026-01-01 00:00:00", Every: "1 DAY"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
+			want: []string{
+				"materialization refresh.start/refresh.every require refresh.mode 'async'",
+			},
+		},
+		{
+			name: "starrocks async materialized view with valid refresh is successful",
+			assets: []*pipeline.Asset{
+				{
+					Name: "task1",
+					Type: pipeline.AssetTypeStarRocksQuery,
+					Materialization: pipeline.Materialization{
+						Type: pipeline.MaterializationTypeMaterializedView,
+					},
+					StarRocks: pipeline.StarRocksConfig{
+						Refresh: &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: "async", Start: "2026-01-01 00:00:00", Every: "1 DAY"},
+					},
+				},
+			},
+			wantErr: assert.NoError,
 		},
 	}
 	ctx := t.Context()
