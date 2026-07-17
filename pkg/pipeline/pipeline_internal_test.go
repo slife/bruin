@@ -4,7 +4,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+const starRocksMaterializationModeAsync = "async"
 
 // TestMergeStarRocksDefaults covers mergeStarRocksDefaults directly. It is
 // unexported, so this lives in the internal `package pipeline` test file
@@ -19,7 +22,7 @@ func TestMergeStarRocksDefaults(t *testing.T) {
 			OrderBy: []string{"created_at"},
 			Materialization: &StarRocksMaterializationConfig{
 				Type: "materialized_view",
-				Mode: "async",
+				Mode: starRocksMaterializationModeAsync,
 				Refresh: &StarRocksRefresh{
 					Mode:  "async",
 					Start: "2024-01-01",
@@ -43,7 +46,7 @@ func TestMergeStarRocksDefaults(t *testing.T) {
 			Materialization: &StarRocksMaterializationConfig{
 				Type:    "materialized_view",
 				Mode:    "async",
-				Refresh: &StarRocksRefresh{Mode: "async"},
+				Refresh: &StarRocksRefresh{Mode: starRocksMaterializationModeAsync},
 			},
 		}
 		target := StarRocksConfig{
@@ -67,7 +70,7 @@ func TestMergeStarRocksDefaults(t *testing.T) {
 			OrderBy: []string{"created_at"},
 			Materialization: &StarRocksMaterializationConfig{
 				Type: "materialized_view",
-				Mode: "async",
+				Mode: starRocksMaterializationModeAsync,
 				Refresh: &StarRocksRefresh{
 					Mode:         "async",
 					Start:        "2024-01-01",
@@ -127,13 +130,13 @@ starrocks:
   order_by: [event_date, user_id]
 `))
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, []string{"user_id"}, asset.Materialization.ClusterBy)
 	assert.Equal(t, 8, asset.StarRocks.Buckets)
 	assert.Equal(t, []string{"event_date", "user_id"}, asset.StarRocks.OrderBy)
 	assert.Equal(t, &StarRocksMaterializationConfig{
 		Type: "materialized_view",
-		Mode: "async",
+		Mode: starRocksMaterializationModeAsync,
 		Refresh: &StarRocksRefresh{
 			Trigger:      "deferred",
 			Mode:         "async",

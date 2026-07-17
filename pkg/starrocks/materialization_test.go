@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const selectIDFromAnalyticsSource = "SELECT id FROM analytics.src"
+
 func TestMaterializer_Render(t *testing.T) {
 	t.Parallel()
 
@@ -422,7 +424,7 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{ClusterBy: []string{"user_id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets:         8,
-					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeAsync},
 				},
 			},
 			query: "SELECT user_id FROM analytics.events",
@@ -444,8 +446,8 @@ func TestMaterializer_Render(t *testing.T) {
 					OrderBy:    []string{"event_date", "user_id"},
 					Properties: map[string]string{"partition_refresh_number": "4"},
 					Materialization: &pipeline.StarRocksMaterializationConfig{
-						Type:    "materialized_view",
-						Mode:    "async",
+						Type:    string(materializationTypeMaterializedView),
+						Mode:    starRocksMaterializationModeAsync,
 						Refresh: &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00", Every: "1 day"},
 					},
 				},
@@ -468,13 +470,13 @@ func TestMaterializer_Render(t *testing.T) {
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
 					Materialization: &pipeline.StarRocksMaterializationConfig{
-						Type:    "materialized_view",
-						Mode:    "async",
+						Type:    string(materializationTypeMaterializedView),
+						Mode:    starRocksMaterializationModeAsync,
 						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual},
 					},
 				},
 			},
-			query: "SELECT id FROM analytics.src",
+			query: selectIDFromAnalyticsSource,
 			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_manual`\n" +
 				"DISTRIBUTED BY HASH(`id`) BUCKETS 2\n" +
 				"REFRESH MANUAL\n" +
@@ -490,13 +492,13 @@ func TestMaterializer_Render(t *testing.T) {
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
 					Materialization: &pipeline.StarRocksMaterializationConfig{
-						Type:    "materialized_view",
-						Mode:    "async",
+						Type:    string(materializationTypeMaterializedView),
+						Mode:    starRocksMaterializationModeAsync,
 						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual, RefreshOnRun: boolPtr(false)},
 					},
 				},
 			},
-			query: "SELECT id FROM analytics.src",
+			query: selectIDFromAnalyticsSource,
 			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_manual2`\n" +
 				"DISTRIBUTED BY HASH(`id`) BUCKETS 2\n" +
 				"REFRESH MANUAL\n" +
@@ -510,7 +512,7 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{},
 				StarRocks: pipeline.StarRocksConfig{
 					Properties:      map[string]string{"replication_num": "1"},
-					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "sync"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeSync},
 				},
 			},
 			query: "SELECT store_id, sum(amount) AS total FROM analytics.sales GROUP BY store_id",
@@ -520,6 +522,42 @@ func TestMaterializer_Render(t *testing.T) {
 				"SELECT store_id, sum(amount) AS total FROM analytics.sales GROUP BY store_id;",
 		},
 		{
+			name: "sync MV rejects full refresh",
+			asset: &pipeline.Asset{
+				Name: "analytics.sales_rollup",
+				StarRocks: pipeline.StarRocksConfig{
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeSync},
+				},
+			},
+			query:       "SELECT store_id, sum(amount) FROM analytics.sales GROUP BY store_id",
+			fullRefresh: true,
+			wantErr:     "full refresh is not supported for StarRocks sync materialized views",
+		},
+		{
+			name: "sync MV rejects create replace strategy",
+			asset: &pipeline.Asset{
+				Name:            "analytics.sales_rollup",
+				Materialization: pipeline.Materialization{Strategy: pipeline.MaterializationStrategyCreateReplace},
+				StarRocks: pipeline.StarRocksConfig{
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeSync},
+				},
+			},
+			query:   "SELECT store_id, sum(amount) FROM analytics.sales GROUP BY store_id",
+			wantErr: "create+replace is not supported for StarRocks sync materialized views",
+		},
+		{
+			name: "MV rejects unknown outer mode",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_mode",
+				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: "eventual"},
+				},
+			},
+			query:   "SELECT id FROM analytics.sales",
+			wantErr: "starrocks.materialization.mode",
+		},
+		{
 			name: "async MV full refresh drops and recreates",
 			asset: &pipeline.Asset{
 				Name:            "analytics.mv_fr",
@@ -527,13 +565,13 @@ func TestMaterializer_Render(t *testing.T) {
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
 					Materialization: &pipeline.StarRocksMaterializationConfig{
-						Type:    "materialized_view",
-						Mode:    "async",
+						Type:    string(materializationTypeMaterializedView),
+						Mode:    starRocksMaterializationModeAsync,
 						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
 					},
 				},
 			},
-			query:       "SELECT id FROM analytics.src",
+			query:       selectIDFromAnalyticsSource,
 			fullRefresh: true,
 			want: "DROP MATERIALIZED VIEW IF EXISTS `analytics`.`mv_fr`;\n" +
 				"CREATE MATERIALIZED VIEW `analytics`.`mv_fr`\n" +
@@ -549,10 +587,10 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization:   pipeline.Materialization{ClusterBy: []string{"id"}},
 				RefreshRestricted: boolPtr(true),
 				StarRocks: pipeline.StarRocksConfig{
-					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeAsync},
 				},
 			},
-			query:       "SELECT id FROM analytics.src",
+			query:       selectIDFromAnalyticsSource,
 			fullRefresh: true,
 			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_restricted`\n" +
 				"DISTRIBUTED BY HASH(`id`)\n" +
@@ -565,7 +603,7 @@ func TestMaterializer_Render(t *testing.T) {
 				Name:            "analytics.bad_sync",
 				Materialization: pipeline.Materialization{},
 				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
-					Type:    "materialized_view",
+					Type:    string(materializationTypeMaterializedView),
 					Mode:    "sync",
 					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
 				}},
@@ -579,8 +617,8 @@ func TestMaterializer_Render(t *testing.T) {
 				Name:            "analytics.bad_async",
 				Materialization: pipeline.Materialization{},
 				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
-					Type: "materialized_view",
-					Mode: "async",
+					Type: string(materializationTypeMaterializedView),
+					Mode: starRocksMaterializationModeAsync,
 				}},
 			},
 			query:   "SELECT 1",
@@ -594,8 +632,8 @@ func TestMaterializer_Render(t *testing.T) {
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: -1,
 					Materialization: &pipeline.StarRocksMaterializationConfig{
-						Type:    "materialized_view",
-						Mode:    "async",
+						Type:    string(materializationTypeMaterializedView),
+						Mode:    starRocksMaterializationModeAsync,
 						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
 					},
 				},
@@ -611,8 +649,8 @@ func TestMaterializer_Render(t *testing.T) {
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 4,
 					Materialization: &pipeline.StarRocksMaterializationConfig{
-						Type:    "materialized_view",
-						Mode:    "async",
+						Type:    string(materializationTypeMaterializedView),
+						Mode:    starRocksMaterializationModeAsync,
 						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
 					},
 				},
@@ -627,10 +665,10 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					OrderBy:         []string{" "},
-					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeAsync},
 				},
 			},
-			query:   "SELECT id FROM analytics.src",
+			query:   selectIDFromAnalyticsSource,
 			wantErr: "order_by",
 		},
 		{
@@ -640,10 +678,10 @@ func TestMaterializer_Render(t *testing.T) {
 				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets:         -1,
-					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: starRocksMaterializationModeAsync},
 				},
 			},
-			query:   "SELECT id FROM analytics.src",
+			query:   selectIDFromAnalyticsSource,
 			wantErr: "buckets",
 		},
 	}
@@ -719,4 +757,20 @@ func TestBuildRefreshClause(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestRenderMaterializedViewRejectsUnknownMode(t *testing.T) {
+	t.Parallel()
+
+	asset := &pipeline.Asset{
+		Name:            "analytics.bad_mode",
+		Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
+		StarRocks: pipeline.StarRocksConfig{
+			Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(materializationTypeMaterializedView), Mode: "eventual"},
+		},
+	}
+
+	_, err := renderMaterializedView(asset, "SELECT id FROM analytics.sales", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "starrocks.materialization.mode")
 }

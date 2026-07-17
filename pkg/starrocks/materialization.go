@@ -20,6 +20,8 @@ const (
 	starRocksTableModelDuplicateKey     = "duplicate_key"
 	starRocksTableModelUniqueKey        = "unique_key"
 	starRocksTableModelPrimaryKey       = "primary_key"
+	starRocksMaterializationModeAsync   = "async"
+	starRocksMaterializationModeSync    = "sync"
 	starRocksRefreshModeAsync           = "async"
 	starRocksRefreshModeManual          = "manual"
 )
@@ -43,6 +45,20 @@ func (m *Materializer) Render(asset *pipeline.Asset, query string) (string, erro
 	effectiveType, err := effectiveMaterializationType(asset)
 	if err != nil {
 		return "", err
+	}
+	if effectiveType == materializationTypeMaterializedView {
+		mode, err := materializedViewMode(asset)
+		if err != nil {
+			return "", err
+		}
+		if mode == starRocksMaterializationModeSync {
+			if m.fullRefresh {
+				return "", errors.New("full refresh is not supported for StarRocks sync materialized views")
+			}
+			if asset.Materialization.Strategy == pipeline.MaterializationStrategyCreateReplace {
+				return "", errors.New("create+replace is not supported for StarRocks sync materialized views")
+			}
+		}
 	}
 
 	assetCopy := *asset
@@ -80,6 +96,21 @@ func effectiveMaterializationType(asset *pipeline.Asset) (pipeline.Materializati
 		return materializationTypeMaterializedView, nil
 	default:
 		return pipeline.MaterializationTypeNone, fmt.Errorf("unsupported StarRocks materialization type %q", config.Type)
+	}
+}
+
+func materializedViewMode(asset *pipeline.Asset) (string, error) {
+	mode := ""
+	if asset.StarRocks.Materialization != nil {
+		mode = strings.ToLower(strings.TrimSpace(asset.StarRocks.Materialization.Mode))
+	}
+	switch mode {
+	case "", starRocksMaterializationModeAsync:
+		return starRocksMaterializationModeAsync, nil
+	case starRocksMaterializationModeSync:
+		return starRocksMaterializationModeSync, nil
+	default:
+		return "", fmt.Errorf("invalid starrocks.materialization.mode %q: expected \"async\" or \"sync\"", asset.StarRocks.Materialization.Mode)
 	}
 }
 
@@ -153,7 +184,11 @@ func buildMaterializedViewFullRefresh(asset *pipeline.Asset, query string) (stri
 func renderMaterializedView(asset *pipeline.Asset, query string, fullRefresh bool) (string, error) {
 	trimmedQuery := strings.TrimSuffix(strings.TrimSpace(query), ";")
 	materialization := asset.StarRocks.Materialization
-	sync := materialization != nil && strings.EqualFold(strings.TrimSpace(materialization.Mode), "sync")
+	mode, err := materializedViewMode(asset)
+	if err != nil {
+		return "", err
+	}
+	sync := mode == starRocksMaterializationModeSync
 
 	if sync {
 		if materialization.Refresh != nil {

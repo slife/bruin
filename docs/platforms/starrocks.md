@@ -118,6 +118,8 @@ The `starrocks.materialization` block is atomic when pipeline defaults are appli
 
 Bruin supports both kinds of StarRocks materialized view: asynchronous (the default) and synchronous rollups.
 
+Asynchronous MVs support the default strategy and `create+replace`. Synchronous MVs support only the default strategy; Bruin rejects `create+replace` and `--full-refresh` for sync rollups.
+
 ##### Asynchronous materialized views
 
 An async MV is a standalone object with its own distribution, partitioning, sort key, refresh schedule, and properties:
@@ -182,6 +184,8 @@ GROUP BY event_date, user_id;
 
 Setting `starrocks.materialization.mode: sync` creates a single-table StarRocks **rollup** materialized view instead of an async one. Sync MVs cannot set `cluster_by`, `partition_by`, `order_by`, `buckets`, or `refresh` — StarRocks manages those details for rollups automatically.
 
+A sync MV is an index on its base table, not a standalone relation. Query the base table normally and StarRocks may transparently rewrite the query to use the rollup.
+
 ```bruin-sql
 /* @bruin
 name: analytics.sales_rollup
@@ -214,7 +218,8 @@ GROUP BY store_id;
 
 - **First run / normal re-run:** Bruin emits `CREATE MATERIALIZED VIEW IF NOT EXISTS ...`, which is a no-op if the MV already exists. When `refresh_on_run` resolves to `true`, Bruin follows it with a blocking `REFRESH MATERIALIZED VIEW <name> WITH SYNC MODE;` so a completed `bruin run` means the MV's data is up to date.
 - **`refresh_on_run` defaults:** `true` for `starrocks.materialization.refresh.mode: manual` (a manual-mode MV never refreshes itself, so Bruin's run is the only trigger), `false` for async refresh or when no refresh block is set. An explicit `refresh_on_run: true`/`false` always overrides the default.
-- **`--full-refresh`:** Bruin issues `DROP MATERIALIZED VIEW IF EXISTS <name>;` followed by `CREATE MATERIALIZED VIEW <name> ...` (no `IF NOT EXISTS`), rebuilding the MV from scratch.
+- **Async `--full-refresh`:** Bruin issues `DROP MATERIALIZED VIEW IF EXISTS <name>;` followed by `CREATE MATERIALIZED VIEW <name> ...` (no `IF NOT EXISTS`), rebuilding the MV from scratch.
+- **Sync `--full-refresh`:** rejected. Sync rollups support normal idempotent runs only.
 
 ### `starrocks.seed`
 

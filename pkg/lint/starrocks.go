@@ -62,7 +62,11 @@ func validateStarRocksMaterializedView(asset *pipeline.Asset, config *pipeline.S
 	}
 
 	switch asset.Materialization.Strategy {
-	case pipeline.MaterializationStrategyNone, pipeline.MaterializationStrategyCreateReplace:
+	case pipeline.MaterializationStrategyNone:
+	case pipeline.MaterializationStrategyCreateReplace:
+		if mode == starRocksMaterializationModeSync {
+			issues = append(issues, starRocksIssue(asset, "materialization.strategy 'create+replace' is not supported for StarRocks sync materialized views; available strategy is: none"))
+		}
 	default:
 		issues = append(issues, starRocksIssue(asset, fmt.Sprintf(
 			"materialization.strategy '%s' is not supported for StarRocks materialized views; available strategies are: [none create+replace]",

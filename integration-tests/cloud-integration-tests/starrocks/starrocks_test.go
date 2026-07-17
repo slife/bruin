@@ -231,10 +231,11 @@ environments:
 				Name: "materialized-view-sync",
 				Steps: []e2e.Task{
 					runAsset("materialized view (sync): create source", "materialized-view-sync/assets/mv_src.sql"),
-					runAsset("materialized view (sync): create sync MV", "materialized-view-sync/assets/mv_sync.sql"),
+					runAssetWithArgs("materialized view (sync): create sync MV", "materialized-view-sync/assets/mv_sync.sql"),
+					runAssetWithArgs("materialized view (sync): normal rerun", "materialized-view-sync/assets/mv_sync.sql"),
 					queryContains(
-						"materialized view (sync): query rollup",
-						"SELECT total FROM `bruin_test`.`mv_sync` WHERE id = 1",
+						"materialized view (sync): query base table aggregation",
+						"SELECT id, SUM(amount) AS total FROM `bruin_test`.`mv_sync_src` WHERE id = 1 GROUP BY id",
 						"15",
 					),
 				},

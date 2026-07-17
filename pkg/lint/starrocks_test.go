@@ -20,22 +20,30 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			name: "valid async materialized view",
 			asset: starRocksMaterializedViewAsset(
 				pipeline.Materialization{ClusterBy: []string{"id"}},
-				&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync},
 			),
 		},
 		{
 			name: "valid sync materialized view",
 			asset: starRocksMaterializedViewAsset(
 				pipeline.Materialization{},
-				&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "sync"},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeSync},
 			),
+		},
+		{
+			name: "sync materialized view rejects create replace strategy",
+			asset: starRocksMaterializedViewAsset(
+				pipeline.Materialization{Strategy: pipeline.MaterializationStrategyCreateReplace},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeSync},
+			),
+			want: []string{"materialization.strategy 'create+replace' is not supported for StarRocks sync materialized views; available strategy is: none"},
 		},
 		{
 			name: "configuration is rejected on another datasource",
 			asset: &pipeline.Asset{
 				Type: pipeline.AssetTypeBigqueryQuery,
 				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
-					Type: "materialized_view",
+					Type: starRocksMaterializationTypeMaterializedView,
 				}},
 			},
 			want: []string{"starrocks configuration is only supported for StarRocks SQL assets"},
@@ -60,7 +68,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			name: "invalid local mode",
 			asset: starRocksMaterializedViewAsset(
 				pipeline.Materialization{ClusterBy: []string{"id"}},
-				&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "eventual"},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: "eventual"},
 			),
 			want: []string{"starrocks.materialization.mode must be 'async' or 'sync'"},
 		},
@@ -68,7 +76,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			name: "unsupported materialized view strategy",
 			asset: starRocksMaterializedViewAsset(
 				pipeline.Materialization{Strategy: pipeline.MaterializationStrategyAppend, ClusterBy: []string{"id"}},
-				&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync},
 			),
 			want: []string{"materialization.strategy 'append' is not supported for StarRocks materialized views; available strategies are: [none create+replace]"},
 		},
@@ -77,7 +85,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			asset: func() *pipeline.Asset {
 				asset := starRocksMaterializedViewAsset(
 					pipeline.Materialization{ClusterBy: []string{"id"}},
-					&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+					&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync},
 				)
 				asset.StarRocks.TableModel = "primary_key"
 				return asset
@@ -89,7 +97,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			asset: func() *pipeline.Asset {
 				asset := starRocksMaterializedViewAsset(
 					pipeline.Materialization{},
-					&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async", Refresh: &pipeline.StarRocksRefresh{Mode: "manual"}},
+					&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual}},
 				)
 				asset.StarRocks.Buckets = 4
 				return asset
@@ -101,7 +109,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			asset: func() *pipeline.Asset {
 				asset := starRocksMaterializedViewAsset(
 					pipeline.Materialization{ClusterBy: []string{"id"}, PartitionBy: "dt"},
-					&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "sync", Refresh: &pipeline.StarRocksRefresh{Mode: "async"}},
+					&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeSync, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync}},
 				)
 				asset.StarRocks.Buckets = 4
 				asset.StarRocks.OrderBy = []string{"dt"}
@@ -120,7 +128,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			asset: func() *pipeline.Asset {
 				asset := starRocksMaterializedViewAsset(
 					pipeline.Materialization{ClusterBy: []string{""}},
-					&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+					&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync},
 				)
 				asset.StarRocks.OrderBy = []string{" "}
 				return asset
@@ -134,7 +142,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			name: "refresh interval requires a positive integer",
 			asset: starRocksMaterializedViewAsset(
 				pipeline.Materialization{},
-				&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async", Refresh: &pipeline.StarRocksRefresh{Mode: "async", Every: "0 day"}},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "0 day"}},
 			),
 			want: []string{"starrocks.materialization.refresh.every count must be a positive integer"},
 		},
@@ -142,7 +150,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			name: "refresh interval rejects unsupported units",
 			asset: starRocksMaterializedViewAsset(
 				pipeline.Materialization{},
-				&pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async", Refresh: &pipeline.StarRocksRefresh{Mode: "async", Every: "1 week"}},
+				&pipeline.StarRocksMaterializationConfig{Type: starRocksMaterializationTypeMaterializedView, Mode: starRocksMaterializationModeAsync, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "1 week"}},
 			),
 			want: []string{"starrocks.materialization.refresh.every unit must be DAY, HOUR, MINUTE, or SECOND"},
 		},
@@ -154,7 +162,7 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 					Type:     pipeline.MaterializationTypeView,
 					Strategy: pipeline.MaterializationStrategyDeleteInsert,
 				},
-				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{Type: "table"}},
+				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{Type: string(pipeline.MaterializationTypeTable)}},
 			},
 			want: []string{"Materialization strategy 'delete+insert' requires the 'incremental_key' field to be set"},
 		},
@@ -163,8 +171,8 @@ func TestEnsureStarRocksMaterializationValuesAreValid(t *testing.T) {
 			asset: &pipeline.Asset{
 				Type: pipeline.AssetTypeStarRocksQuery,
 				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
-					Type: "view",
-					Mode: "sync",
+					Type: string(pipeline.MaterializationTypeView),
+					Mode: starRocksMaterializationModeSync,
 				}},
 			},
 			want: []string{"starrocks.materialization.mode is only supported when type is 'materialized_view'"},
