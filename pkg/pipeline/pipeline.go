@@ -1198,9 +1198,32 @@ func (d DorisConfig) IsZero() bool {
 // the materialization's `cluster_by` and `partition_by` fields respectively, so
 // they are intentionally absent here.
 type StarRocksConfig struct {
-	TableModel string            `json:"table_model,omitempty" yaml:"table_model,omitempty" mapstructure:"table_model"`
-	Buckets    int               `json:"buckets,omitempty" yaml:"buckets,omitempty" mapstructure:"buckets"`
-	Properties map[string]string `json:"properties,omitempty" yaml:"properties,omitempty" mapstructure:"properties"`
+	TableModel      string                          `json:"table_model,omitempty" yaml:"table_model,omitempty" mapstructure:"table_model"`
+	Buckets         int                             `json:"buckets,omitempty" yaml:"buckets,omitempty" mapstructure:"buckets"`
+	Properties      map[string]string               `json:"properties,omitempty" yaml:"properties,omitempty" mapstructure:"properties"`
+	OrderBy         []string                        `json:"order_by,omitempty" yaml:"order_by,omitempty" mapstructure:"order_by"`
+	Materialization *StarRocksMaterializationConfig `json:"materialization,omitempty" yaml:"materialization,omitempty" mapstructure:"materialization"`
+}
+
+// StarRocksMaterializationConfig selects StarRocks-specific materialization
+// behavior without expanding the shared materialization type registry.
+type StarRocksMaterializationConfig struct {
+	Type    string            `json:"type,omitempty" yaml:"type,omitempty" mapstructure:"type"`
+	Mode    string            `json:"mode,omitempty" yaml:"mode,omitempty" mapstructure:"mode"`
+	Refresh *StarRocksRefresh `json:"refresh,omitempty" yaml:"refresh,omitempty" mapstructure:"refresh"`
+}
+
+// StarRocksRefresh models a StarRocks asynchronous materialized view REFRESH
+// clause. Trigger maps to REFRESH IMMEDIATE|DEFERRED, Mode maps to ASYNC|MANUAL,
+// and Start/Every build the scheduled `ASYNC START(...) EVERY (INTERVAL ...)`
+// form. RefreshOnRun overrides whether `bruin run` issues REFRESH MATERIALIZED
+// VIEW on a re-run of an already-existing MV.
+type StarRocksRefresh struct {
+	Trigger      string `json:"trigger,omitempty" yaml:"trigger,omitempty" mapstructure:"trigger"`
+	Mode         string `json:"mode,omitempty" yaml:"mode,omitempty" mapstructure:"mode"`
+	Start        string `json:"start,omitempty" yaml:"start,omitempty" mapstructure:"start"`
+	Every        string `json:"every,omitempty" yaml:"every,omitempty" mapstructure:"every"`
+	RefreshOnRun *bool  `json:"refresh_on_run,omitempty" yaml:"refresh_on_run,omitempty" mapstructure:"refresh_on_run"`
 }
 
 func (s StarRocksConfig) MarshalJSON() ([]byte, error) {
@@ -1213,7 +1236,11 @@ func (s StarRocksConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (s StarRocksConfig) IsZero() bool {
-	return s.TableModel == "" && s.Buckets == 0 && len(s.Properties) == 0
+	return s.TableModel == "" &&
+		s.Buckets == 0 &&
+		len(s.Properties) == 0 &&
+		len(s.OrderBy) == 0 &&
+		s.Materialization == nil
 }
 
 type RoutingConfig struct {
@@ -3291,6 +3318,12 @@ func mergeStarRocksDefaults(target *StarRocksConfig, defaults StarRocksConfig) {
 	if target.Buckets == 0 {
 		target.Buckets = defaults.Buckets
 	}
+	if len(target.OrderBy) == 0 && len(defaults.OrderBy) > 0 {
+		target.OrderBy = append([]string(nil), defaults.OrderBy...)
+	}
+	if target.Materialization == nil {
+		target.Materialization = cloneStarRocksMaterialization(defaults.Materialization)
+	}
 	if len(defaults.Properties) > 0 {
 		if target.Properties == nil {
 			target.Properties = make(map[string]string, len(defaults.Properties))
@@ -3301,6 +3334,30 @@ func mergeStarRocksDefaults(target *StarRocksConfig, defaults StarRocksConfig) {
 			}
 		}
 	}
+}
+
+func cloneStarRocksMaterialization(m *StarRocksMaterializationConfig) *StarRocksMaterializationConfig {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	clone.Refresh = cloneStarRocksRefresh(m.Refresh)
+	return &clone
+}
+
+// cloneStarRocksRefresh returns a deep copy of r so that merging pipeline-level
+// StarRocks defaults into multiple sibling assets never lets them share the
+// same *StarRocksRefresh (or its RefreshOnRun *bool) by reference. Later
+// stages render fields such as Refresh.Start/Every in place, which would
+// otherwise corrupt the shared default for every other asset that inherited
+// it.
+func cloneStarRocksRefresh(r *StarRocksRefresh) *StarRocksRefresh {
+	if r == nil {
+		return nil
+	}
+	clone := *r
+	clone.RefreshOnRun = cloneBoolPtr(r.RefreshOnRun)
+	return &clone
 }
 
 func appendMissingStringValues[S ~[]E, E ~string](target *S, defaults S) {

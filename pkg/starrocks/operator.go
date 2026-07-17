@@ -69,7 +69,12 @@ func (o BasicOperator) RunTask(ctx context.Context, p *pipeline.Pipeline, t *pip
 		queries = []*query.Query{{Query: ""}}
 	}
 
-	if len(queries) > 1 && t.Materialization.Type != pipeline.MaterializationTypeNone {
+	effectiveMaterialization, err := effectiveMaterializationType(t)
+	if err != nil {
+		return err
+	}
+
+	if len(queries) > 1 && effectiveMaterialization != pipeline.MaterializationTypeNone {
 		return errors.New("cannot enable materialization for tasks with multiple queries")
 	}
 
@@ -88,7 +93,7 @@ func (o BasicOperator) RunTask(ctx context.Context, p *pipeline.Pipeline, t *pip
 		return errors.Errorf("connection '%s' is not a StarRocks connection", connName)
 	}
 
-	if t.Materialization.Type != pipeline.MaterializationTypeNone {
+	if effectiveMaterialization != pipeline.MaterializationTypeNone {
 		if err = conn.CreateSchemaIfNotExist(ctx, t); err != nil {
 			return err
 		}

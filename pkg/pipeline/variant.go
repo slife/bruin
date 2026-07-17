@@ -465,6 +465,19 @@ func renderAssetStrings(render RenderFunc, a *Asset) error {
 			return err
 		}
 	}
+	for i, col := range a.StarRocks.OrderBy {
+		if a.StarRocks.OrderBy[i], err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.order_by[%d]", originalName, i), col); err != nil {
+			return err
+		}
+	}
+	if a.StarRocks.Materialization != nil && a.StarRocks.Materialization.Refresh != nil {
+		if a.StarRocks.Materialization.Refresh.Start, err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.materialization.refresh.start", originalName), a.StarRocks.Materialization.Refresh.Start); err != nil {
+			return err
+		}
+		if a.StarRocks.Materialization.Refresh.Every, err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.materialization.refresh.every", originalName), a.StarRocks.Materialization.Refresh.Every); err != nil {
+			return err
+		}
+	}
 	if err := renderRoutingConfig(render, fmt.Sprintf("asset[%s].routing", originalName), a.Routing); err != nil {
 		return err
 	}

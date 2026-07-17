@@ -1359,14 +1359,23 @@ func EnsureAssetNotificationsAreValid(ctx context.Context, p *pipeline.Pipeline,
 }
 
 func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *pipeline.Pipeline, asset *pipeline.Asset) ([]*Issue, error) {
+	if asset.Type == pipeline.AssetTypeStarRocksQuery || !asset.StarRocks.IsZero() {
+		return ensureStarRocksMaterializationValuesAreValid(asset)
+	}
+	return ensureGenericMaterializationValuesAreValid(asset), nil
+}
+
+func ensureGenericMaterializationValuesAreValid(asset *pipeline.Asset) []*Issue {
 	issues := make([]*Issue, 0)
+	materializationType := asset.Materialization.Type
+
 	if asset.Type == pipeline.AssetTypePython || asset.Type == pipeline.AssetTypeIngestr {
-		return issues, nil
+		return issues
 	}
 
-	switch asset.Materialization.Type {
+	switch materializationType {
 	case pipeline.MaterializationTypeNone:
-		return issues, nil
+		return issues
 	case pipeline.MaterializationTypeView:
 		if asset.Materialization.Strategy != pipeline.MaterializationStrategyNone {
 			issues = append(issues, &Issue{
@@ -1412,7 +1421,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 		}
 
 		if asset.Materialization.Strategy == pipeline.MaterializationStrategyNone {
-			return issues, nil
+			return issues
 		}
 
 		if asset.Materialization.IncrementalKey != "" &&
@@ -1440,7 +1449,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			}
 		case pipeline.MaterializationStrategyCreateReplace:
 		case pipeline.MaterializationStrategyAppend:
-			return issues, nil
+			return issues
 		case pipeline.MaterializationStrategyDeleteInsert:
 			if asset.Materialization.IncrementalKey == "" {
 				issues = append(issues, &Issue{
@@ -1450,7 +1459,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			}
 		case pipeline.MaterializationStrategyTruncateInsert:
 			// truncate+insert doesn't require any special fields
-			return issues, nil
+			return issues
 		case pipeline.MaterializationStrategyMerge:
 			if len(asset.Columns) == 0 {
 				issues = append(issues, &Issue{
@@ -1538,7 +1547,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 		})
 	}
 
-	return issues, nil
+	return issues
 }
 
 func ensureDataVaultHubColumnsAreValid(asset *pipeline.Asset) []*Issue {

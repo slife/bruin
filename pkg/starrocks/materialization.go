@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,15 +16,101 @@ import (
 )
 
 const (
-	starRocksTableModelDuplicateKey = "duplicate_key"
-	starRocksTableModelUniqueKey    = "unique_key"
-	starRocksTableModelPrimaryKey   = "primary_key"
+	materializationTypeMaterializedView = pipeline.MaterializationType("materialized_view")
+	starRocksTableModelDuplicateKey     = "duplicate_key"
+	starRocksTableModelUniqueKey        = "unique_key"
+	starRocksTableModelPrimaryKey       = "primary_key"
+	starRocksMaterializationModeAsync   = "async"
+	starRocksMaterializationModeSync    = "sync"
+	starRocksRefreshModeAsync           = "async"
+	starRocksRefreshModeManual          = "manual"
 )
 
-func NewMaterializer(fullRefresh bool) *pipeline.Materializer {
-	return &pipeline.Materializer{
-		MaterializationMap: matMap,
-		FullRefresh:        fullRefresh,
+type Materializer struct {
+	base        *pipeline.Materializer
+	fullRefresh bool
+}
+
+func NewMaterializer(fullRefresh bool) *Materializer {
+	return &Materializer{
+		base: &pipeline.Materializer{
+			MaterializationMap: matMap,
+			FullRefresh:        fullRefresh,
+		},
+		fullRefresh: fullRefresh,
+	}
+}
+
+func (m *Materializer) Render(asset *pipeline.Asset, query string) (string, error) {
+	effectiveType, err := effectiveMaterializationType(asset)
+	if err != nil {
+		return "", err
+	}
+	if effectiveType == materializationTypeMaterializedView {
+		mode, err := materializedViewMode(asset)
+		if err != nil {
+			return "", err
+		}
+		if mode == starRocksMaterializationModeSync {
+			if m.fullRefresh {
+				return "", errors.New("full refresh is not supported for StarRocks sync materialized views")
+			}
+			if asset.Materialization.Strategy == pipeline.MaterializationStrategyCreateReplace {
+				return "", errors.New("create+replace is not supported for StarRocks sync materialized views")
+			}
+		}
+	}
+
+	assetCopy := *asset
+	assetCopy.Materialization = asset.Materialization
+	assetCopy.Materialization.Type = effectiveType
+	if effectiveType == materializationTypeMaterializedView && m.fullRefresh &&
+		assetCopy.Materialization.Strategy != pipeline.MaterializationStrategyDDL &&
+		(assetCopy.RefreshRestricted == nil || !*assetCopy.RefreshRestricted) {
+		assetCopy.Materialization.Strategy = pipeline.MaterializationStrategyCreateReplace
+	}
+
+	return m.base.Render(&assetCopy, query)
+}
+
+func (m *Materializer) LogIfFullRefreshAndDDL(writer interface{}, asset *pipeline.Asset) error {
+	return m.base.LogIfFullRefreshAndDDL(writer, asset)
+}
+
+func (m *Materializer) IsFullRefresh() bool {
+	return m.fullRefresh
+}
+
+func effectiveMaterializationType(asset *pipeline.Asset) (pipeline.MaterializationType, error) {
+	config := asset.StarRocks.Materialization
+	if config == nil || strings.TrimSpace(config.Type) == "" {
+		return asset.Materialization.Type, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(config.Type)) {
+	case string(pipeline.MaterializationTypeTable):
+		return pipeline.MaterializationTypeTable, nil
+	case string(pipeline.MaterializationTypeView):
+		return pipeline.MaterializationTypeView, nil
+	case string(materializationTypeMaterializedView):
+		return materializationTypeMaterializedView, nil
+	default:
+		return pipeline.MaterializationTypeNone, fmt.Errorf("unsupported StarRocks materialization type %q", config.Type)
+	}
+}
+
+func materializedViewMode(asset *pipeline.Asset) (string, error) {
+	mode := ""
+	if asset.StarRocks.Materialization != nil {
+		mode = strings.ToLower(strings.TrimSpace(asset.StarRocks.Materialization.Mode))
+	}
+	switch mode {
+	case "", starRocksMaterializationModeAsync:
+		return starRocksMaterializationModeAsync, nil
+	case starRocksMaterializationModeSync:
+		return starRocksMaterializationModeSync, nil
+	default:
+		return "", fmt.Errorf("invalid starrocks.materialization.mode %q: expected \"async\" or \"sync\"", asset.StarRocks.Materialization.Mode)
 	}
 }
 
@@ -50,6 +137,18 @@ var matMap = pipeline.AssetMaterializationMap{
 		pipeline.MaterializationStrategySCD2ByColumn:   errorMaterializer,
 		pipeline.MaterializationStrategySCD2ByTime:     errorMaterializer,
 	},
+	materializationTypeMaterializedView: {
+		pipeline.MaterializationStrategyNone:           buildMaterializedView,
+		pipeline.MaterializationStrategyCreateReplace:  buildMaterializedViewFullRefresh,
+		pipeline.MaterializationStrategyAppend:         errorMaterializer,
+		pipeline.MaterializationStrategyDeleteInsert:   errorMaterializer,
+		pipeline.MaterializationStrategyTruncateInsert: errorMaterializer,
+		pipeline.MaterializationStrategyMerge:          errorMaterializer,
+		pipeline.MaterializationStrategyTimeInterval:   errorMaterializer,
+		pipeline.MaterializationStrategyDDL:            errorMaterializer,
+		pipeline.MaterializationStrategySCD2ByColumn:   errorMaterializer,
+		pipeline.MaterializationStrategySCD2ByTime:     errorMaterializer,
+	},
 }
 
 func errorMaterializer(asset *pipeline.Asset, _ string) (string, error) {
@@ -68,6 +167,134 @@ func viewMaterializer(asset *pipeline.Asset, query string) (string, error) {
 		quoteIdentifier(asset.Name),
 		strings.TrimSuffix(strings.TrimSpace(query), ";"),
 	), nil
+}
+
+func buildMaterializedView(asset *pipeline.Asset, query string) (string, error) {
+	return renderMaterializedView(asset, query, false)
+}
+
+func buildMaterializedViewFullRefresh(asset *pipeline.Asset, query string) (string, error) {
+	return renderMaterializedView(asset, query, true)
+}
+
+// renderMaterializedView builds a StarRocks CREATE MATERIALIZED VIEW statement.
+// When fullRefresh is true it is prefixed with DROP MATERIALIZED VIEW IF EXISTS
+// and omits IF NOT EXISTS; otherwise it uses IF NOT EXISTS and, for manual-mode
+// refresh (or an explicit refresh_on_run), appends REFRESH MATERIALIZED VIEW.
+func renderMaterializedView(asset *pipeline.Asset, query string, fullRefresh bool) (string, error) {
+	trimmedQuery := strings.TrimSuffix(strings.TrimSpace(query), ";")
+	materialization := asset.StarRocks.Materialization
+	mode, err := materializedViewMode(asset)
+	if err != nil {
+		return "", err
+	}
+	sync := mode == starRocksMaterializationModeSync
+
+	if sync {
+		if materialization.Refresh != nil {
+			return "", errors.New("StarRocks sync (rollup) materialized views (`starrocks.materialization.mode: sync`) do not support `refresh`")
+		}
+		if len(asset.Materialization.ClusterBy) > 0 || strings.TrimSpace(asset.Materialization.PartitionBy) != "" || len(asset.StarRocks.OrderBy) > 0 {
+			return "", errors.New("StarRocks sync (rollup) materialized views (`starrocks.materialization.mode: sync`) do not support `cluster_by`, `partition_by`, or `order_by`")
+		}
+	}
+
+	var b strings.Builder
+	if fullRefresh {
+		b.WriteString("DROP MATERIALIZED VIEW IF EXISTS " + quoteIdentifier(asset.Name) + ";\n")
+		b.WriteString("CREATE MATERIALIZED VIEW " + quoteIdentifier(asset.Name))
+	} else {
+		b.WriteString("CREATE MATERIALIZED VIEW IF NOT EXISTS " + quoteIdentifier(asset.Name))
+	}
+
+	var refresh *pipeline.StarRocksRefresh
+	if materialization != nil {
+		refresh = materialization.Refresh
+	}
+	refreshClause, err := buildRefreshClause(refresh)
+	if err != nil {
+		return "", err
+	}
+
+	if !sync {
+		hasDistribution := len(asset.Materialization.ClusterBy) > 0
+		if !hasDistribution && refreshClause == "" {
+			return "", errors.New("StarRocks async materialized view requires distribution (`cluster_by`) or a `refresh` block; set `starrocks.materialization.mode: sync` for a rollup view")
+		}
+
+		if asset.StarRocks.Buckets < 0 {
+			return "", errors.New("starrocks buckets must be greater than zero")
+		}
+		if asset.StarRocks.Buckets > 0 && !hasDistribution {
+			return "", errors.New("starrocks buckets requires materialization.cluster_by")
+		}
+
+		if hasDistribution {
+			for _, column := range asset.Materialization.ClusterBy {
+				if strings.TrimSpace(column) == "" {
+					return "", errors.New("starrocks cluster_by columns cannot be empty")
+				}
+			}
+			b.WriteString("\nDISTRIBUTED BY HASH(" + strings.Join(quoteColumnNames(asset.Materialization.ClusterBy), ", ") + ")")
+			if asset.StarRocks.Buckets > 0 {
+				fmt.Fprintf(&b, " BUCKETS %d", asset.StarRocks.Buckets)
+			}
+		}
+
+		if refreshClause != "" {
+			b.WriteString("\n" + refreshClause)
+		}
+
+		if partitionBy := strings.TrimSpace(asset.Materialization.PartitionBy); partitionBy != "" {
+			b.WriteString("\nPARTITION BY (" + partitionBy + ")")
+		}
+
+		if len(asset.StarRocks.OrderBy) > 0 {
+			for _, column := range asset.StarRocks.OrderBy {
+				if strings.TrimSpace(column) == "" {
+					return "", errors.New("starrocks order_by columns cannot be empty")
+				}
+			}
+			b.WriteString("\nORDER BY (" + strings.Join(quoteColumnNames(asset.StarRocks.OrderBy), ", ") + ")")
+		}
+	}
+
+	if props := buildMaterializedViewProperties(asset); props != "" {
+		b.WriteString("\nPROPERTIES (" + props + ")")
+	}
+
+	b.WriteString("\nAS\n" + trimmedQuery + ";")
+
+	// On a normal (non full-refresh) run, CREATE ... IF NOT EXISTS is a no-op for
+	// an existing MV, so trigger REFRESH when the asset opts in.
+	if !fullRefresh && shouldRefreshOnRun(asset) {
+		b.WriteString("\nREFRESH MATERIALIZED VIEW " + quoteIdentifier(asset.Name) + " WITH SYNC MODE;")
+	}
+
+	return b.String(), nil
+}
+
+// shouldRefreshOnRun resolves whether a re-run should issue REFRESH MATERIALIZED
+// VIEW. Default: true for manual-mode refresh, false otherwise. An explicit
+// refresh_on_run always wins.
+func shouldRefreshOnRun(asset *pipeline.Asset) bool {
+	if asset.StarRocks.Materialization == nil {
+		return false
+	}
+	refresh := asset.StarRocks.Materialization.Refresh
+	if refresh == nil {
+		return false
+	}
+	if refresh.RefreshOnRun != nil {
+		return *refresh.RefreshOnRun
+	}
+	return strings.EqualFold(strings.TrimSpace(refresh.Mode), starRocksRefreshModeManual)
+}
+
+// buildMaterializedViewProperties renders PROPERTIES for a materialized view.
+// Unlike tables, it does NOT inject a default replication_num.
+func buildMaterializedViewProperties(asset *pipeline.Asset) string {
+	return renderPropertyClauses(asset.StarRocks.Properties)
 }
 
 func buildAppendQuery(asset *pipeline.Asset, query string) (string, error) {
@@ -266,12 +493,84 @@ func buildDDLQuery(asset *pipeline.Asset, _ string) (string, error) {
 	return statement + ";", nil
 }
 
+// buildRefreshClause assembles a StarRocks async materialized-view REFRESH
+// clause from the structured refresh config. Returns "" when refresh is nil.
+func buildRefreshClause(refresh *pipeline.StarRocksRefresh) (string, error) {
+	if refresh == nil {
+		return "", nil
+	}
+
+	parts := []string{"REFRESH"}
+
+	switch strings.ToLower(strings.TrimSpace(refresh.Trigger)) {
+	case "":
+		// omit; StarRocks defaults to IMMEDIATE
+	case "immediate":
+		parts = append(parts, "IMMEDIATE")
+	case "deferred":
+		parts = append(parts, "DEFERRED")
+	default:
+		return "", fmt.Errorf("invalid refresh.trigger %q: expected \"immediate\" or \"deferred\"", refresh.Trigger)
+	}
+
+	start := strings.TrimSpace(refresh.Start)
+	every := strings.TrimSpace(refresh.Every)
+
+	switch strings.ToLower(strings.TrimSpace(refresh.Mode)) {
+	case starRocksRefreshModeManual:
+		if start != "" || every != "" {
+			return "", errors.New("refresh.start and refresh.every require refresh.mode \"async\"")
+		}
+		parts = append(parts, "MANUAL")
+	case starRocksRefreshModeAsync, "":
+		asyncParts := []string{"ASYNC"}
+		if start != "" && every == "" {
+			return "", errors.New("refresh.start requires refresh.every")
+		}
+		if start != "" {
+			asyncParts = append(asyncParts, fmt.Sprintf("START('%s')", start))
+		}
+		if every != "" {
+			interval, err := formatEveryInterval(every)
+			if err != nil {
+				return "", err
+			}
+			asyncParts = append(asyncParts, fmt.Sprintf("EVERY (%s)", interval))
+		}
+		parts = append(parts, strings.Join(asyncParts, " "))
+	default:
+		return "", fmt.Errorf("invalid refresh.mode %q: expected \"async\" or \"manual\"", refresh.Mode)
+	}
+
+	return strings.Join(parts, " "), nil
+}
+
+// formatEveryInterval turns "1 day" into "INTERVAL 1 DAY".
+func formatEveryInterval(every string) (string, error) {
+	fields := strings.Fields(every)
+	if len(fields) != 2 {
+		return "", fmt.Errorf("invalid refresh.every %q: expected \"<count> <unit>\" such as \"1 day\"", every)
+	}
+	count, err := strconv.Atoi(fields[0])
+	if err != nil || count <= 0 {
+		return "", fmt.Errorf("invalid refresh.every %q: count must be a positive integer", every)
+	}
+	unit := strings.ToUpper(fields[1])
+	switch unit {
+	case "DAY", "HOUR", "MINUTE", "SECOND":
+	default:
+		return "", fmt.Errorf("invalid refresh.every %q: unit must be DAY, HOUR, MINUTE, or SECOND", every)
+	}
+	return fmt.Sprintf("INTERVAL %d %s", count, unit), nil
+}
+
 func requiresTypedCreateTable(asset *pipeline.Asset) bool {
 	return asset.Materialization.Strategy == pipeline.MaterializationStrategyMerge ||
 		strings.TrimSpace(asset.StarRocks.TableModel) != "" ||
 		len(asset.Materialization.ClusterBy) > 0 ||
 		strings.TrimSpace(asset.Materialization.PartitionBy) != "" ||
-		asset.StarRocks.Buckets != 0
+		asset.StarRocks.Buckets != 0 ||
+		len(asset.StarRocks.OrderBy) > 0
 }
 
 func validateMergeAsset(asset *pipeline.Asset) error {
@@ -332,13 +631,18 @@ func buildCreateTableStatement(asset *pipeline.Asset, ifNotExists bool) (string,
 		partitionClause = fmt.Sprintf("PARTITION BY (%s)\n", partitionBy)
 	}
 
+	orderByClause := ""
+	if len(asset.StarRocks.OrderBy) > 0 {
+		orderByClause = "ORDER BY (" + strings.Join(quoteColumnNames(asset.StarRocks.OrderBy), ", ") + ")\n"
+	}
+
 	return fmt.Sprintf(
 		`%s%s (
 %s
 )
 %s(%s)
 %sDISTRIBUTED BY HASH(%s) BUCKETS %d
-PROPERTIES (%s)`,
+%sPROPERTIES (%s)`,
 		createPrefix,
 		quoteIdentifier(asset.Name),
 		strings.Join(columnDefs, ",\n"),
@@ -347,6 +651,7 @@ PROPERTIES (%s)`,
 		partitionClause,
 		strings.Join(quoteColumnNames(distributedBy), ", "),
 		buckets,
+		orderByClause,
 		buildStarRocksProperties(asset),
 	), nil
 }
@@ -514,6 +819,16 @@ func buildStarRocksProperties(asset *pipeline.Asset) string {
 	}
 	for key, value := range asset.StarRocks.Properties {
 		properties[key] = value
+	}
+	return renderPropertyClauses(properties)
+}
+
+// renderPropertyClauses renders a StarRocks PROPERTIES body ("k" = "v", ...)
+// from the given map, with keys sorted for deterministic output and both keys
+// and values escaped. Returns "" for an empty map.
+func renderPropertyClauses(properties map[string]string) string {
+	if len(properties) == 0 {
+		return ""
 	}
 
 	keys := make([]string, 0, len(properties))

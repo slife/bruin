@@ -202,6 +202,46 @@ environments:
 			},
 		},
 		{
+			name: "materialized-view-async",
+			workflow: e2e.Workflow{
+				Name: "materialized-view-async",
+				Steps: []e2e.Task{
+					runAsset("materialized view (async): create source", "materialized-view-async/assets/mv_src.sql"),
+					runAsset("materialized view (async): create async MV", "materialized-view-async/assets/mv_async.sql"),
+					runAssetWithArgs("materialized view (async): normal rerun", "materialized-view-async/assets/mv_async.sql"),
+					queryContains(
+						"materialized view (async): query refreshed data",
+						"SELECT SUM(value) AS total FROM `bruin_test`.`mv_async`",
+						"15",
+					),
+					runAssetWithArgs("materialized view (async): second normal rerun", "materialized-view-async/assets/mv_async.sql"),
+					runAsset("materialized view (async): full refresh again", "materialized-view-async/assets/mv_async.sql"),
+					runAssetWithArgs("materialized view (async): rerun after rebuild", "materialized-view-async/assets/mv_async.sql"),
+					queryContains(
+						"materialized view (async): query rebuilt data",
+						"SELECT COUNT(*) AS row_count FROM `bruin_test`.`mv_async`",
+						"2",
+					),
+				},
+			},
+		},
+		{
+			name: "materialized-view-sync",
+			workflow: e2e.Workflow{
+				Name: "materialized-view-sync",
+				Steps: []e2e.Task{
+					runAsset("materialized view (sync): create source", "materialized-view-sync/assets/mv_src.sql"),
+					runAssetWithArgs("materialized view (sync): create sync MV", "materialized-view-sync/assets/mv_sync.sql"),
+					runAssetWithArgs("materialized view (sync): normal rerun", "materialized-view-sync/assets/mv_sync.sql"),
+					queryContains(
+						"materialized view (sync): query base table aggregation",
+						"SELECT id, SUM(amount) AS total FROM `bruin_test`.`mv_sync_src` WHERE id = 1 GROUP BY id",
+						"15",
+					),
+				},
+			},
+		},
+		{
 			name: "append-materialization",
 			workflow: e2e.Workflow{
 				Name: "append-materialization",

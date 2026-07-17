@@ -92,6 +92,34 @@ func TestMaterializer_Render(t *testing.T) {
 	}
 }
 
+func TestMaterializer_FullRefreshDoesNotSpecialCasePlatformLocalTypes(t *testing.T) {
+	t.Parallel()
+
+	platformLocalType := MaterializationType("materialized_view")
+	calls := map[MaterializationStrategy]bool{}
+	record := func(s MaterializationStrategy) MaterializerFunc {
+		return func(_ *Asset, _ string) (string, error) {
+			calls[s] = true
+			return "", nil
+		}
+	}
+	m := &Materializer{
+		FullRefresh: true,
+		MaterializationMap: AssetMaterializationMap{
+			platformLocalType: {
+				MaterializationStrategyNone:          record(MaterializationStrategyNone),
+				MaterializationStrategyCreateReplace: record(MaterializationStrategyCreateReplace),
+			},
+		},
+	}
+	asset := &Asset{Materialization: Materialization{Type: platformLocalType}}
+
+	_, err := m.Render(asset, "SELECT 1")
+	require.NoError(t, err)
+	assert.True(t, calls[MaterializationStrategyNone], "generic routing must leave platform-local types unchanged")
+	assert.False(t, calls[MaterializationStrategyCreateReplace], "platform wrappers own full-refresh routing")
+}
+
 type stringMaterializer struct {
 	out string
 }
