@@ -468,11 +468,11 @@ func renderAssetStrings(render RenderFunc, a *Asset) error {
 			return err
 		}
 	}
-	if a.StarRocks.Refresh != nil {
-		if a.StarRocks.Refresh.Start, err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.refresh.start", originalName), a.StarRocks.Refresh.Start); err != nil {
+	if a.StarRocks.Materialization != nil && a.StarRocks.Materialization.Refresh != nil {
+		if a.StarRocks.Materialization.Refresh.Start, err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.materialization.refresh.start", originalName), a.StarRocks.Materialization.Refresh.Start); err != nil {
 			return err
 		}
-		if a.StarRocks.Refresh.Every, err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.refresh.every", originalName), a.StarRocks.Refresh.Every); err != nil {
+		if a.StarRocks.Materialization.Refresh.Every, err = maybeRender(render, fmt.Sprintf("asset[%s].starrocks.materialization.refresh.every", originalName), a.StarRocks.Materialization.Refresh.Every); err != nil {
 			return err
 		}
 	}

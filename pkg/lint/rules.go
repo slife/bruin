@@ -65,8 +65,6 @@ const (
 	materializationPartitionByNotSupportedForViews    = "Materialization partition by is not supported for views because views cannot be partitioned"
 	materializationIncrementalKeyNotSupportedForViews = "Materialization incremental key is not supported for views because views cannot be updated incrementally"
 	materializationClusterByNotSupportedForViews      = "Materialization cluster by is not supported for views because views cannot be clustered"
-	starRocksRefreshModeAsync                         = "async"
-	starRocksRefreshModeManual                        = "manual"
 )
 
 var validIDRegexCompiled = regexp.MustCompile(validIDRegex)
@@ -1359,30 +1357,23 @@ func EnsureAssetNotificationsAreValid(ctx context.Context, p *pipeline.Pipeline,
 }
 
 func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *pipeline.Pipeline, asset *pipeline.Asset) ([]*Issue, error) {
+	if asset.Type == pipeline.AssetTypeStarRocksQuery || !asset.StarRocks.IsZero() {
+		return ensureStarRocksMaterializationValuesAreValid(asset)
+	}
+	return ensureGenericMaterializationValuesAreValid(asset), nil
+}
+
+func ensureGenericMaterializationValuesAreValid(asset *pipeline.Asset) []*Issue {
 	issues := make([]*Issue, 0)
 	materializationType := asset.Materialization.Type
 
-	if asset.StarRocks.Sync && materializationType != pipeline.MaterializationTypeMaterializedView {
-		issues = append(issues, &Issue{Task: asset, Description: "starrocks.sync is only supported for materialized views"})
-	}
-	if asset.StarRocks.Refresh != nil && materializationType != pipeline.MaterializationTypeMaterializedView {
-		issues = append(issues, &Issue{Task: asset, Description: "starrocks.refresh is only supported for materialized views"})
-	}
-	if len(asset.StarRocks.OrderBy) > 0 && materializationType != pipeline.MaterializationTypeTable && materializationType != pipeline.MaterializationTypeMaterializedView {
-		issues = append(issues, &Issue{Task: asset, Description: "starrocks.order_by is only supported for tables and materialized views"})
-	}
-
-	if materializationType == pipeline.MaterializationTypeMaterializedView && asset.Type != pipeline.AssetTypeStarRocksQuery {
-		issues = append(issues, &Issue{Task: asset, Description: "Materialization type 'materialized_view' is only supported for StarRocks SQL assets"})
-		return issues, nil
-	}
 	if asset.Type == pipeline.AssetTypePython || asset.Type == pipeline.AssetTypeIngestr {
-		return issues, nil
+		return issues
 	}
 
 	switch materializationType {
 	case pipeline.MaterializationTypeNone:
-		return issues, nil
+		return issues
 	case pipeline.MaterializationTypeView:
 		if asset.Materialization.Strategy != pipeline.MaterializationStrategyNone {
 			issues = append(issues, &Issue{
@@ -1428,7 +1419,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 		}
 
 		if asset.Materialization.Strategy == pipeline.MaterializationStrategyNone {
-			return issues, nil
+			return issues
 		}
 
 		if asset.Materialization.IncrementalKey != "" &&
@@ -1456,7 +1447,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			}
 		case pipeline.MaterializationStrategyCreateReplace:
 		case pipeline.MaterializationStrategyAppend:
-			return issues, nil
+			return issues
 		case pipeline.MaterializationStrategyDeleteInsert:
 			if asset.Materialization.IncrementalKey == "" {
 				issues = append(issues, &Issue{
@@ -1466,7 +1457,7 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 			}
 		case pipeline.MaterializationStrategyTruncateInsert:
 			// truncate+insert doesn't require any special fields
-			return issues, nil
+			return issues
 		case pipeline.MaterializationStrategyMerge:
 			if len(asset.Columns) == 0 {
 				issues = append(issues, &Issue{
@@ -1540,56 +1531,6 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 				),
 			})
 		}
-	case pipeline.MaterializationTypeMaterializedView:
-		switch asset.Materialization.Strategy {
-		case pipeline.MaterializationStrategyNone, pipeline.MaterializationStrategyCreateReplace:
-		default:
-			issues = append(issues, &Issue{
-				Task: asset,
-				Description: fmt.Sprintf(
-					"Materialization strategy '%s' is not supported for StarRocks materialized views; available strategies are: [none create+replace]",
-					asset.Materialization.Strategy,
-				),
-			})
-		}
-
-		refresh := asset.StarRocks.Refresh
-		if asset.StarRocks.Sync {
-			if refresh != nil {
-				issues = append(issues, &Issue{Task: asset, Description: "StarRocks sync materialized views (starrocks.sync: true) do not support 'refresh'"})
-			}
-			if len(asset.Materialization.ClusterBy) > 0 || asset.Materialization.PartitionBy != "" || len(asset.StarRocks.OrderBy) > 0 {
-				issues = append(issues, &Issue{Task: asset, Description: "StarRocks sync materialized views (starrocks.sync: true) do not support cluster_by, partition_by, or order_by"})
-			}
-		} else if len(asset.Materialization.ClusterBy) == 0 && refresh == nil {
-			issues = append(issues, &Issue{Task: asset, Description: "StarRocks async materialized view requires distribution (cluster_by) or a refresh block; set starrocks.sync: true for a rollup view"})
-		}
-		if refresh != nil {
-			mode := strings.ToLower(strings.TrimSpace(refresh.Mode))
-			switch strings.ToLower(strings.TrimSpace(refresh.Trigger)) {
-			case "", "immediate", "deferred":
-			default:
-				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.trigger must be 'immediate' or 'deferred'"})
-			}
-			switch mode {
-			case "", starRocksRefreshModeAsync, starRocksRefreshModeManual:
-			default:
-				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.mode must be 'async' or 'manual'"})
-			}
-			start := strings.TrimSpace(refresh.Start)
-			every := strings.TrimSpace(refresh.Every)
-			if mode == starRocksRefreshModeManual && (start != "" || every != "") {
-				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.start/refresh.every require refresh.mode 'async'"})
-			}
-			if (mode == "" || mode == starRocksRefreshModeAsync) && start != "" && every == "" {
-				issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.start requires refresh.every"})
-			}
-			if every != "" {
-				if len(strings.Fields(every)) != 2 {
-					issues = append(issues, &Issue{Task: asset, Description: "materialization refresh.every must be in the form '<count> <unit>', e.g. '1 day'"})
-				}
-			}
-		}
 	default:
 		issues = append(issues, &Issue{
 			Task: asset,
@@ -1599,13 +1540,12 @@ func EnsureMaterializationValuesAreValidForSingleAsset(ctx context.Context, p *p
 				[]pipeline.MaterializationType{
 					pipeline.MaterializationTypeView,
 					pipeline.MaterializationTypeTable,
-					pipeline.MaterializationTypeMaterializedView,
 				},
 			),
 		})
 	}
 
-	return issues, nil
+	return issues
 }
 
 func ensureDataVaultHubColumnsAreValid(asset *pipeline.Asset) []*Issue {

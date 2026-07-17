@@ -580,10 +580,9 @@ type (
 )
 
 const (
-	MaterializationTypeNone             MaterializationType = ""
-	MaterializationTypeView             MaterializationType = "view"
-	MaterializationTypeTable            MaterializationType = "table"
-	MaterializationTypeMaterializedView MaterializationType = "materialized_view"
+	MaterializationTypeNone  MaterializationType = ""
+	MaterializationTypeView  MaterializationType = "view"
+	MaterializationTypeTable MaterializationType = "table"
 )
 
 type (
@@ -1198,12 +1197,19 @@ func (d DorisConfig) IsZero() bool {
 // the materialization's `cluster_by` and `partition_by` fields respectively, so
 // they are intentionally absent here.
 type StarRocksConfig struct {
-	TableModel string            `json:"table_model,omitempty" yaml:"table_model,omitempty" mapstructure:"table_model"`
-	Buckets    int               `json:"buckets,omitempty" yaml:"buckets,omitempty" mapstructure:"buckets"`
-	Properties map[string]string `json:"properties,omitempty" yaml:"properties,omitempty" mapstructure:"properties"`
-	OrderBy    []string          `json:"order_by,omitempty" yaml:"order_by,omitempty" mapstructure:"order_by"`
-	Sync       bool              `json:"sync,omitempty" yaml:"sync,omitempty" mapstructure:"sync"`
-	Refresh    *StarRocksRefresh `json:"refresh,omitempty" yaml:"refresh,omitempty" mapstructure:"refresh"`
+	TableModel      string                          `json:"table_model,omitempty" yaml:"table_model,omitempty" mapstructure:"table_model"`
+	Buckets         int                             `json:"buckets,omitempty" yaml:"buckets,omitempty" mapstructure:"buckets"`
+	Properties      map[string]string               `json:"properties,omitempty" yaml:"properties,omitempty" mapstructure:"properties"`
+	OrderBy         []string                        `json:"order_by,omitempty" yaml:"order_by,omitempty" mapstructure:"order_by"`
+	Materialization *StarRocksMaterializationConfig `json:"materialization,omitempty" yaml:"materialization,omitempty" mapstructure:"materialization"`
+}
+
+// StarRocksMaterializationConfig selects StarRocks-specific materialization
+// behavior without expanding the shared materialization type registry.
+type StarRocksMaterializationConfig struct {
+	Type    string            `json:"type,omitempty" yaml:"type,omitempty" mapstructure:"type"`
+	Mode    string            `json:"mode,omitempty" yaml:"mode,omitempty" mapstructure:"mode"`
+	Refresh *StarRocksRefresh `json:"refresh,omitempty" yaml:"refresh,omitempty" mapstructure:"refresh"`
 }
 
 // StarRocksRefresh models a StarRocks asynchronous materialized view REFRESH
@@ -1233,8 +1239,7 @@ func (s StarRocksConfig) IsZero() bool {
 		s.Buckets == 0 &&
 		len(s.Properties) == 0 &&
 		len(s.OrderBy) == 0 &&
-		!s.Sync &&
-		s.Refresh == nil
+		s.Materialization == nil
 }
 
 type RoutingConfig struct {
@@ -3309,11 +3314,8 @@ func mergeStarRocksDefaults(target *StarRocksConfig, defaults StarRocksConfig) {
 	if len(target.OrderBy) == 0 && len(defaults.OrderBy) > 0 {
 		target.OrderBy = append([]string(nil), defaults.OrderBy...)
 	}
-	if !target.Sync {
-		target.Sync = defaults.Sync
-	}
-	if target.Refresh == nil {
-		target.Refresh = cloneStarRocksRefresh(defaults.Refresh)
+	if target.Materialization == nil {
+		target.Materialization = cloneStarRocksMaterialization(defaults.Materialization)
 	}
 	if len(defaults.Properties) > 0 {
 		if target.Properties == nil {
@@ -3325,6 +3327,15 @@ func mergeStarRocksDefaults(target *StarRocksConfig, defaults StarRocksConfig) {
 			}
 		}
 	}
+}
+
+func cloneStarRocksMaterialization(m *StarRocksMaterializationConfig) *StarRocksMaterializationConfig {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	clone.Refresh = cloneStarRocksRefresh(m.Refresh)
+	return &clone
 }
 
 // cloneStarRocksRefresh returns a deep copy of r so that merging pipeline-level

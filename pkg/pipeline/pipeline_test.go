@@ -3505,7 +3505,6 @@ func TestStarRocksConfig_IsZeroAndMerge(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, pipeline.StarRocksConfig{}.IsZero())
-	assert.False(t, pipeline.StarRocksConfig{Sync: true}.IsZero())
 	assert.False(t, pipeline.StarRocksConfig{OrderBy: []string{"a"}}.IsZero())
-	assert.False(t, pipeline.StarRocksConfig{Refresh: &pipeline.StarRocksRefresh{Mode: "async"}}.IsZero())
+	assert.False(t, pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view"}}.IsZero())
 }

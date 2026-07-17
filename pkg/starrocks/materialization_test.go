@@ -55,6 +55,34 @@ func TestMaterializer_Render(t *testing.T) {
 				"SELECT * FROM source;",
 		},
 		{
+			name: "StarRocks table override wins over shared view type",
+			asset: &pipeline.Asset{
+				Name:            "analytics.orders",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeView},
+				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
+					Type: "table",
+				}},
+			},
+			query: "SELECT * FROM source",
+			want: "DROP TABLE IF EXISTS `analytics`.`orders`;\n" +
+				"CREATE TABLE `analytics`.`orders`\n" +
+				"PROPERTIES (\"replication_num\" = \"1\")\n" +
+				"AS\n" +
+				"SELECT * FROM source;",
+		},
+		{
+			name: "StarRocks view override wins over shared table type",
+			asset: &pipeline.Asset{
+				Name:            "analytics.daily_orders",
+				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeTable},
+				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
+					Type: "view",
+				}},
+			},
+			query: "SELECT 1",
+			want:  "DROP VIEW IF EXISTS `analytics`.`daily_orders`;\nCREATE VIEW `analytics`.`daily_orders` AS\nSELECT 1;",
+		},
+		{
 			name: "append emits insert",
 			asset: &pipeline.Asset{
 				Name: "analytics.orders",
@@ -391,8 +419,11 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "async MV minimal with distribution",
 			asset: &pipeline.Asset{
 				Name:            "analytics.mv_users",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"user_id"}},
-				StarRocks:       pipeline.StarRocksConfig{Buckets: 8},
+				Materialization: pipeline.Materialization{ClusterBy: []string{"user_id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets:         8,
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+				},
 			},
 			query: "SELECT user_id FROM analytics.events",
 			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_users`\n" +
@@ -405,15 +436,18 @@ func TestMaterializer_Render(t *testing.T) {
 			asset: &pipeline.Asset{
 				Name: "analytics.dau",
 				Materialization: pipeline.Materialization{
-					Type:        pipeline.MaterializationTypeMaterializedView,
 					PartitionBy: "date_trunc('day', event_date)",
 					ClusterBy:   []string{"user_id"},
 				},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets:    4,
 					OrderBy:    []string{"event_date", "user_id"},
-					Refresh:    &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00", Every: "1 day"},
 					Properties: map[string]string{"partition_refresh_number": "4"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{
+						Type:    "materialized_view",
+						Mode:    "async",
+						Refresh: &pipeline.StarRocksRefresh{Trigger: "deferred", Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00", Every: "1 day"},
+					},
 				},
 			},
 			query: "SELECT event_date, user_id FROM analytics.events",
@@ -430,10 +464,14 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "async MV manual mode triggers refresh on run",
 			asset: &pipeline.Asset{
 				Name:            "analytics.mv_manual",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
+				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
-					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual},
+					Materialization: &pipeline.StarRocksMaterializationConfig{
+						Type:    "materialized_view",
+						Mode:    "async",
+						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual},
+					},
 				},
 			},
 			query: "SELECT id FROM analytics.src",
@@ -448,10 +486,14 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "async MV manual refresh_on_run false suppresses refresh",
 			asset: &pipeline.Asset{
 				Name:            "analytics.mv_manual2",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
+				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: 2,
-					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual, RefreshOnRun: boolPtr(false)},
+					Materialization: &pipeline.StarRocksMaterializationConfig{
+						Type:    "materialized_view",
+						Mode:    "async",
+						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual, RefreshOnRun: boolPtr(false)},
+					},
 				},
 			},
 			query: "SELECT id FROM analytics.src",
@@ -465,8 +507,11 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "sync rollup MV",
 			asset: &pipeline.Asset{
 				Name:            "analytics.sales_rollup",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
-				StarRocks:       pipeline.StarRocksConfig{Sync: true, Properties: map[string]string{"replication_num": "1"}},
+				Materialization: pipeline.Materialization{},
+				StarRocks: pipeline.StarRocksConfig{
+					Properties:      map[string]string{"replication_num": "1"},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "sync"},
+				},
 			},
 			query: "SELECT store_id, sum(amount) AS total FROM analytics.sales GROUP BY store_id",
 			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`sales_rollup`\n" +
@@ -478,8 +523,15 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "async MV full refresh drops and recreates",
 			asset: &pipeline.Asset{
 				Name:            "analytics.mv_fr",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
-				StarRocks:       pipeline.StarRocksConfig{Buckets: 2, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync}},
+				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets: 2,
+					Materialization: &pipeline.StarRocksMaterializationConfig{
+						Type:    "materialized_view",
+						Mode:    "async",
+						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
+					},
+				},
 			},
 			query:       "SELECT id FROM analytics.src",
 			fullRefresh: true,
@@ -491,11 +543,32 @@ func TestMaterializer_Render(t *testing.T) {
 				"SELECT id FROM analytics.src;",
 		},
 		{
+			name: "async MV full refresh respects refresh restriction",
+			asset: &pipeline.Asset{
+				Name:              "analytics.mv_restricted",
+				Materialization:   pipeline.Materialization{ClusterBy: []string{"id"}},
+				RefreshRestricted: boolPtr(true),
+				StarRocks: pipeline.StarRocksConfig{
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+				},
+			},
+			query:       "SELECT id FROM analytics.src",
+			fullRefresh: true,
+			want: "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`mv_restricted`\n" +
+				"DISTRIBUTED BY HASH(`id`)\n" +
+				"AS\n" +
+				"SELECT id FROM analytics.src;",
+		},
+		{
 			name: "sync MV rejects refresh",
 			asset: &pipeline.Asset{
 				Name:            "analytics.bad_sync",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
-				StarRocks:       pipeline.StarRocksConfig{Sync: true, Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync}},
+				Materialization: pipeline.Materialization{},
+				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
+					Type:    "materialized_view",
+					Mode:    "sync",
+					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
+				}},
 			},
 			query:   "SELECT 1",
 			wantErr: "sync",
@@ -504,7 +577,11 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "async MV requires distribution or refresh",
 			asset: &pipeline.Asset{
 				Name:            "analytics.bad_async",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
+				Materialization: pipeline.Materialization{},
+				StarRocks: pipeline.StarRocksConfig{Materialization: &pipeline.StarRocksMaterializationConfig{
+					Type: "materialized_view",
+					Mode: "async",
+				}},
 			},
 			query:   "SELECT 1",
 			wantErr: "distribution",
@@ -513,21 +590,58 @@ func TestMaterializer_Render(t *testing.T) {
 			name: "async MV rejects negative buckets without distribution",
 			asset: &pipeline.Asset{
 				Name:            "analytics.bad_buckets",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView},
+				Materialization: pipeline.Materialization{},
 				StarRocks: pipeline.StarRocksConfig{
 					Buckets: -1,
-					Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
+					Materialization: &pipeline.StarRocksMaterializationConfig{
+						Type:    "materialized_view",
+						Mode:    "async",
+						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
+					},
 				},
 			},
 			query:   "SELECT 1",
 			wantErr: "buckets",
 		},
 		{
+			name: "async MV rejects buckets without distribution",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_buckets_no_distribution",
+				Materialization: pipeline.Materialization{},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets: 4,
+					Materialization: &pipeline.StarRocksMaterializationConfig{
+						Type:    "materialized_view",
+						Mode:    "async",
+						Refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync},
+					},
+				},
+			},
+			query:   "SELECT 1",
+			wantErr: "buckets",
+		},
+		{
+			name: "async MV rejects empty order by keys",
+			asset: &pipeline.Asset{
+				Name:            "analytics.bad_order",
+				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					OrderBy:         []string{" "},
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+				},
+			},
+			query:   "SELECT id FROM analytics.src",
+			wantErr: "order_by",
+		},
+		{
 			name: "async MV rejects negative buckets with distribution",
 			asset: &pipeline.Asset{
 				Name:            "analytics.bad_buckets_dist",
-				Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeMaterializedView, ClusterBy: []string{"id"}},
-				StarRocks:       pipeline.StarRocksConfig{Buckets: -1},
+				Materialization: pipeline.Materialization{ClusterBy: []string{"id"}},
+				StarRocks: pipeline.StarRocksConfig{
+					Buckets:         -1,
+					Materialization: &pipeline.StarRocksMaterializationConfig{Type: "materialized_view", Mode: "async"},
+				},
 			},
 			query:   "SELECT id FROM analytics.src",
 			wantErr: "buckets",
@@ -587,6 +701,9 @@ func TestBuildRefreshClause(t *testing.T) {
 		{name: "start with manual", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeManual, Start: "2025-01-01 10:00:00"}, wantErr: "start"},
 		{name: "async start without every", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Start: "2025-01-01 10:00:00"}, wantErr: "refresh.start requires refresh.every"},
 		{name: "malformed every", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "soon"}, wantErr: "every"},
+		{name: "zero every count", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "0 day"}, wantErr: "positive integer"},
+		{name: "non-numeric every count", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "many days"}, wantErr: "positive integer"},
+		{name: "unsupported every unit", refresh: &pipeline.StarRocksRefresh{Mode: starRocksRefreshModeAsync, Every: "1 week"}, wantErr: "DAY, HOUR, MINUTE, or SECOND"},
 	}
 
 	for _, tt := range tests {

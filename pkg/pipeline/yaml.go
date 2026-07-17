@@ -387,23 +387,6 @@ type doris struct {
 	Properties    map[string]string `yaml:"properties"`
 }
 
-type starrocksRefresh struct {
-	Trigger      string `yaml:"trigger"`
-	Mode         string `yaml:"mode"`
-	Start        string `yaml:"start"`
-	Every        string `yaml:"every"`
-	RefreshOnRun *bool  `yaml:"refresh_on_run"`
-}
-
-type starrocks struct {
-	TableModel string            `yaml:"table_model"`
-	Buckets    int               `yaml:"buckets"`
-	Properties map[string]string `yaml:"properties"`
-	OrderBy    []string          `yaml:"order_by"`
-	Sync       bool              `yaml:"sync"`
-	Refresh    *starrocksRefresh `yaml:"refresh"`
-}
-
 func notificationsOrNil(n Notifications) *Notifications {
 	if len(n.Slack) == 0 && len(n.MSTeams) == 0 && len(n.Discord) == 0 && len(n.Webhook) == 0 && len(n.Email) == 0 {
 		return nil
@@ -438,7 +421,7 @@ type taskDefinition struct {
 	Snowflake             snowflake         `yaml:"snowflake"`
 	Athena                athena            `yaml:"athena"`
 	Doris                 doris             `yaml:"doris"`
-	StarRocks             starrocks         `yaml:"starrocks"`
+	StarRocks             StarRocksConfig   `yaml:"starrocks"`
 	Routing               *RoutingConfig    `yaml:"routing"`
 	IntervalModifiers     IntervalModifiers `yaml:"interval_modifiers"`
 	Domains               []string          `yaml:"domains"`
@@ -631,23 +614,6 @@ func taskDefinitionToAsset(definition taskDefinition) (*Asset, error) {
 		}
 	}
 
-	starRocksCfg := StarRocksConfig{
-		TableModel: definition.StarRocks.TableModel,
-		Buckets:    definition.StarRocks.Buckets,
-		Properties: definition.StarRocks.Properties,
-		OrderBy:    definition.StarRocks.OrderBy,
-		Sync:       definition.StarRocks.Sync,
-	}
-	if definition.StarRocks.Refresh != nil {
-		starRocksCfg.Refresh = &StarRocksRefresh{
-			Trigger:      definition.StarRocks.Refresh.Trigger,
-			Mode:         definition.StarRocks.Refresh.Mode,
-			Start:        definition.StarRocks.Refresh.Start,
-			Every:        definition.StarRocks.Refresh.Every,
-			RefreshOnRun: definition.StarRocks.Refresh.RefreshOnRun,
-		}
-	}
-
 	task := Asset{
 		ID:              hash(definition.Name),
 		URI:             definition.URI,
@@ -679,7 +645,7 @@ func taskDefinitionToAsset(definition taskDefinition) (*Asset, error) {
 			Buckets:       definition.Doris.Buckets,
 			Properties:    definition.Doris.Properties,
 		},
-		StarRocks:         starRocksCfg,
+		StarRocks:         definition.StarRocks,
 		Routing:           definition.Routing,
 		IntervalModifiers: definition.IntervalModifiers,
 		Domains:           definition.Domains,

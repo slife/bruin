@@ -409,10 +409,14 @@ func TestRenderAssetStrings_StarRocksRefreshTemplated(t *testing.T) {
 		Name: "analytics.mv",
 		StarRocks: pipeline.StarRocksConfig{
 			OrderBy: []string{"{{ order_col }}"},
-			Refresh: &pipeline.StarRocksRefresh{
-				Mode:  "async",
-				Start: "{{ start_ts }}",
-				Every: "1 day",
+			Materialization: &pipeline.StarRocksMaterializationConfig{
+				Type: "materialized_view",
+				Mode: "async",
+				Refresh: &pipeline.StarRocksRefresh{
+					Mode:  "async",
+					Start: "{{ start_ts }}",
+					Every: "1 day",
+				},
 			},
 		},
 	}
@@ -428,8 +432,8 @@ func TestRenderAssetStrings_StarRocksRefreshTemplated(t *testing.T) {
 	}
 	require.NoError(t, pipeline.RenderAssetTemplatedFields(asset, render))
 	assert.Equal(t, []string{"event_date"}, asset.StarRocks.OrderBy)
-	assert.Equal(t, "2025-01-01 10:00:00", asset.StarRocks.Refresh.Start)
-	assert.Equal(t, "1 day", asset.StarRocks.Refresh.Every)
+	assert.Equal(t, "2025-01-01 10:00:00", asset.StarRocks.Materialization.Refresh.Start)
+	assert.Equal(t, "1 day", asset.StarRocks.Materialization.Refresh.Every)
 }
 
 // TestVariantVisitorCoversStringFields guards against silently regressing the
@@ -490,13 +494,15 @@ func TestVariantVisitorCoversStringFields(t *testing.T) {
 		// StarRocks refresh clause: Trigger (IMMEDIATE|DEFERRED) and Mode
 		// (ASYNC|MANUAL) are control/enum values, not user-templated text —
 		// only Start/Every (rendered above) carry free-form expressions.
-		"Pipeline.Assets[].StarRocks.Refresh.Trigger":            true,
-		"Pipeline.Assets[].StarRocks.Refresh.Mode":               true,
-		"Pipeline.DefaultValues.Materialization.Type":            true,
-		"Pipeline.DefaultValues.Materialization.Strategy":        true,
-		"Pipeline.DefaultValues.Materialization.TimeGranularity": true,
-		"Pipeline.DefaultValues.Upstreams[].Type":                true,
-		"Pipeline.DefaultValues.Upstreams[].Mode":                true,
+		"Pipeline.Assets[].StarRocks.Materialization.Type":            true,
+		"Pipeline.Assets[].StarRocks.Materialization.Mode":            true,
+		"Pipeline.Assets[].StarRocks.Materialization.Refresh.Trigger": true,
+		"Pipeline.Assets[].StarRocks.Materialization.Refresh.Mode":    true,
+		"Pipeline.DefaultValues.Materialization.Type":                 true,
+		"Pipeline.DefaultValues.Materialization.Strategy":             true,
+		"Pipeline.DefaultValues.Materialization.TimeGranularity":      true,
+		"Pipeline.DefaultValues.Upstreams[].Type":                     true,
+		"Pipeline.DefaultValues.Upstreams[].Mode":                     true,
 
 		// Column structural fields (parse-time linkage, lineage tracking).
 		"Pipeline.Assets[].Columns[].EntityAttribute.Entity":         true,
@@ -613,13 +619,16 @@ func buildFullyPopulatedPipelineForVisitorTest() *pipeline.Pipeline {
 			TableModel: "primary_key",
 			Properties: map[string]string{"replication_num": "1"},
 			OrderBy:    []string{"id"},
-			Sync:       true,
-			Refresh: &pipeline.StarRocksRefresh{
-				Trigger:      "manual",
-				Mode:         "async",
-				Start:        "start",
-				Every:        "every",
-				RefreshOnRun: &refreshOnRunSentinel,
+			Materialization: &pipeline.StarRocksMaterializationConfig{
+				Type: "materialized_view",
+				Mode: "async",
+				Refresh: &pipeline.StarRocksRefresh{
+					Trigger:      "manual",
+					Mode:         "async",
+					Start:        "start",
+					Every:        "every",
+					RefreshOnRun: &refreshOnRunSentinel,
+				},
 			},
 		},
 		Routing: &pipeline.RoutingConfig{EgressGateway: "gw"},
